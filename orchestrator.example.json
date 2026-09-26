@@ -1,0 +1,24 @@
+{
+  "host": "127.0.0.1",
+  "port": 8787,
+  "auth_token": "",
+  "accounts": [
+    {"name": "personal", "config_dir": "~/.claude-personal", "priority": 1, "max_parallel": 1},
+    {"name": "work", "config_dir": "~/.claude-work", "priority": 2, "max_parallel": 1}
+  ],
+  "claude": {
+    "permission_mode": "auto",
+    "model": "",
+    "max_turns": 80,
+    "allowed_tools": []
+  },
+  "local": {
+    "enabled": true,
+    "ollama_url": "http://127.0.0.1:11434",
+    "models": [
+      {"name": "qwen2.5-coder:7b", "roles": ["simple", "router", "reflect"]}
+    ]
+  },
+  "notify": {"ntfy_url": ""},
+  "auto_accept": false
+}

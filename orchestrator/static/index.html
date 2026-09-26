@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Orchestrator</title>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f6f6f4; --surface: #fcfcfb; --surface-2: #f0efec; --border: #e2e1dc;
+  --text: #0b0b0b; --text-2: #52514e; --muted: #8a8984;
+  --accent: #2a78d6; --series-1: #2a78d6; --series-2: #eb6834;
+  --good: #1f8a3b; --warn: #b87400; --bad: #c93838; --info: #2a78d6;
+  --good-bg: #e6f4ea; --warn-bg: #fdf1dc; --bad-bg: #fbe5e5; --info-bg: #e3eefb;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #121211; --surface: #1a1a19; --surface-2: #242422; --border: #33332f;
+    --text: #ffffff; --text-2: #c3c2b7; --muted: #8d8c85;
+    --accent: #3987e5; --series-1: #3987e5; --series-2: #d95926;
+    --good: #4cc36a; --warn: #e0a53a; --bad: #ec6b6b; --info: #6aa9ef;
+    --good-bg: #16301d; --warn-bg: #33270f; --bad-bg: #371818; --info-bg: #15263a;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #121211; --surface: #1a1a19; --surface-2: #242422; --border: #33332f;
+  --text: #ffffff; --text-2: #c3c2b7; --muted: #8d8c85;
+  --accent: #3987e5; --series-1: #3987e5; --series-2: #d95926;
+  --good: #4cc36a; --warn: #e0a53a; --bad: #ec6b6b; --info: #6aa9ef;
+  --good-bg: #16301d; --warn-bg: #33270f; --bad-bg: #371818; --info-bg: #15263a;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+header { position: sticky; top: 0; z-index: 5; background: var(--surface); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 12px; padding: 10px 16px; flex-wrap: wrap; }
+header h1 { font-size: 16px; margin: 0; font-weight: 650; }
+nav { display: flex; gap: 4px; }
+nav button { background: none; border: 0; padding: 6px 12px; border-radius: 8px; color: var(--text-2); cursor: pointer; font: inherit; }
+nav button.on { background: var(--surface-2); color: var(--text); font-weight: 600; }
+.live { margin-left: auto; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.dot.on { background: var(--good); }
+main { max-width: 1200px; margin: 0 auto; padding: 16px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; }
+.card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-2); margin: 0 0 10px; font-weight: 600; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px; }
+.kpi .v { font-size: 24px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.kpi .l { font-size: 12px; color: var(--text-2); }
+label { display: block; font-size: 12px; color: var(--text-2); margin: 8px 0 4px; }
+input, textarea, select { width: 100%; background: var(--surface-2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 10px; font: inherit; }
+textarea { min-height: 90px; resize: vertical; }
+.row { display: grid; grid-template-columns: 2fr 1fr 1.5fr; gap: 10px; }
+@media (max-width: 700px) { .row { grid-template-columns: 1fr; } }
+.btn { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 8px 14px; font: inherit; font-weight: 600; cursor: pointer; }
+.btn.ghost { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); font-weight: 500; }
+.btn.bad { background: var(--bad); }
+.btn.good { background: var(--good); }
+.btn:disabled { opacity: .5; cursor: default; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.tasks { display: flex; flex-direction: column; gap: 8px; }
+.task { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: 10px; cursor: pointer; background: var(--surface); }
+.task:hover { border-color: var(--accent); }
+.task .t { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task .m { font-size: 12px; color: var(--text-2); display: flex; gap: 10px; flex-wrap: wrap; }
+.bar { grid-column: 1 / -1; height: 4px; background: var(--surface-2); border-radius: 2px; overflow: hidden; }
+.bar > i { display: block; height: 100%; background: var(--accent); border-radius: 2px; transition: width .4s; }
+.badge { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
+.s-queued { background: var(--surface-2); color: var(--text-2); }
+.s-running { background: var(--info-bg); color: var(--info); }
+.s-needs_input, .s-review { background: var(--warn-bg); color: var(--warn); }
+.s-done { background: var(--good-bg); color: var(--good); }
+.s-failed, .s-cancelled { background: var(--bad-bg); color: var(--bad); }
+.filters { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.chip { border: 1px solid var(--border); background: var(--surface); color: var(--text-2); border-radius: 999px; padding: 3px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+.chip.on { background: var(--text); color: var(--bg); border-color: var(--text); }
+/* detail drawer */
+#detail { position: fixed; inset: 0; background: rgba(0,0,0,.35); display: none; z-index: 10; }
+#detail.open { display: block; }
+#detail .panel { position: absolute; right: 0; top: 0; bottom: 0; width: min(760px, 100%); background: var(--bg);
+  overflow-y: auto; padding: 16px; border-left: 1px solid var(--border); }
+.close { float: right; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; font-size: 13px; }
+.kv dt { color: var(--text-2); } .kv dd { margin: 0; overflow-wrap: anywhere; }
+.log { font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; max-height: 380px; overflow-y: auto;
+  background: var(--surface-2); border-radius: 8px; padding: 8px; }
+.log div { padding: 2px 0; border-bottom: 1px dashed var(--border); white-space: pre-wrap; overflow-wrap: anywhere; }
+.log .k { color: var(--accent); font-weight: 600; margin-right: 6px; }
+.log .ts { color: var(--muted); margin-right: 6px; }
+.todo { display: flex; gap: 8px; font-size: 13px; padding: 2px 0; }
+.todo.completed { color: var(--muted); text-decoration: line-through; }
+.todo.in_progress { font-weight: 600; }
+.tc { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; background: var(--surface); }
+.tc label { display: flex; gap: 8px; align-items: flex-start; color: var(--text); font-size: 14px; margin: 0; font-weight: 600; }
+.tc input { width: auto; margin-top: 4px; }
+.tc ol { margin: 6px 0 4px 22px; padding: 0; color: var(--text-2); font-size: 13px; }
+.tc .exp { font-size: 13px; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--surface-2); padding: 8px; border-radius: 8px; font-size: 12px; max-height: 300px; overflow: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+th { color: var(--text-2); font-weight: 600; font-size: 12px; }
+.table-wrap { overflow-x: auto; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+.acc { border: 1px solid var(--border); border-radius: 10px; padding: 12px; background: var(--surface); }
+.acc .name { font-weight: 650; font-size: 15px; display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+.meter { height: 6px; background: var(--surface-2); border-radius: 3px; margin: 6px 0; overflow: hidden; }
+.meter > i { display: block; height: 100%; background: var(--series-1); border-radius: 3px; }
+.muted { color: var(--muted); } .small { font-size: 12px; }
+.legend { display: flex; gap: 14px; font-size: 12px; color: var(--text-2); margin-bottom: 6px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+#tip { position: fixed; pointer-events: none; background: var(--text); color: var(--bg); font-size: 12px; padding: 6px 8px; border-radius: 6px; display: none; z-index: 20; }
+.lesson { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.lesson .txt { flex: 1; } .lesson.off .txt { color: var(--muted); text-decoration: line-through; }
+.hidden { display: none !important; }
+.empty { color: var(--muted); padding: 16px; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>AI Orchestrator</h1>
+  <nav>
+    <button data-tab="tasks" class="on">Tasks</button>
+    <button data-tab="usage">Usage</button>
+    <button data-tab="brain">Brain</button>
+  </nav>
+  <div class="live"><span class="dot" id="liveDot"></span><span id="liveTxt">offline</span></div>
+</header>
+
+<main>
+  <section id="tab-tasks">
+    <div class="kpis" id="kpis"></div>
+    <div class="card">
+      <h2>Giao task mới</h2>
+      <textarea id="fPrompt" placeholder="Mô tả việc cần làm… (vd: Sửa bug login trả 500 khi email có dấu cách, thêm test)"></textarea>
+      <div class="row">
+        <div><label>Thư mục dự án (workdir)</label><input id="fWorkdir" placeholder="/home/you/projects/app"></div>
+        <div><label>Giao cho</label>
+          <select id="fAgent"><option value="auto">Tự chọn (brain)</option><option value="claude">Claude</option><option value="local">AI local</option></select></div>
+        <div><label>Lệnh verify (tuỳ chọn)</label><input id="fVerify" placeholder="pytest -q"></div>
+      </div>
+      <div class="actions"><button class="btn" id="fSubmit">Giao việc</button><span class="small muted" id="fMsg"></span></div>
+    </div>
+    <div class="card">
+      <h2>Tasks</h2>
+      <div class="filters" id="filters"></div>
+      <div class="tasks" id="taskList"></div>
+    </div>
+  </section>
+
+  <section id="tab-usage" class="hidden">
+    <div class="card"><h2>Tài khoản Claude</h2><div class="grid2" id="accounts"></div></div>
+    <div class="card"><h2>AI local</h2><div id="locals"></div></div>
+    <div class="card"><h2>Token theo ngày (14 ngày)</h2>
+      <div class="legend"><span><i style="background:var(--series-1)"></i>Claude</span><span><i style="background:var(--series-2)"></i>Local</span></div>
+      <div id="chart"></div>
+      <details class="small"><summary>Xem dạng bảng</summary><div class="table-wrap" id="chartTable"></div></details>
+    </div>
+    <div class="card"><h2>Tỉ lệ thành công theo loại việc</h2><div class="table-wrap" id="byCat"></div></div>
+  </section>
+
+  <section id="tab-brain" class="hidden">
+    <div class="card">
+      <h2>Bài học đã học (được chèn vào prompt các task sau)</h2>
+      <div class="row" style="grid-template-columns: 3fr 1fr auto; align-items:end">
+        <div><label>Thêm bài học thủ công</label><input id="lText" placeholder="vd: Dự án này dùng pnpm, không dùng npm"></div>
+        <div><label>Phạm vi</label><input id="lScope" placeholder="global hoặc /path/dự-án"></div>
+        <div><button class="btn" id="lAdd">Thêm</button></div>
+      </div>
+      <div id="lessons" style="margin-top:10px"></div>
+    </div>
+    <div class="card">
+      <h2>Đề xuất quyền (các tool bị chặn trong auto mode)</h2>
+      <p class="small muted">Duyệt để thêm vào allowlist — lần sau Claude không bị chặn nữa.</p>
+      <div id="perms"></div>
+    </div>
+  </section>
+</main>
+
+<div id="detail"><div class="panel" id="detailPanel"></div></div>
+<div id="tip"></div>
+
+<script>
+const TOKEN = new URLSearchParams(location.search).get("token") || "";
+const H = TOKEN ? { Authorization: "Bearer " + TOKEN } : {};
+const api = (p, body) => fetch(p, body === undefined ? { headers: H } :
+  { method: "POST", headers: { ...H, "Content-Type": "application/json" }, body: JSON.stringify(body) })
+  .then(r => r.json());
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fmtN = n => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(Math.round(n || 0));
+const fmtT = ts => ts ? new Date(ts * 1000).toLocaleString() : "—";
+const ago = ts => { if (!ts) return ""; const s = Date.now() / 1000 - ts; return s < 60 ? Math.round(s) + "s" : s < 3600 ? Math.round(s / 60) + "m" : s < 86400 ? Math.round(s / 3600) + "h" : Math.round(s / 86400) + "d"; };
+const dur = ms => !ms ? "—" : ms < 60000 ? (ms / 1000).toFixed(0) + "s" : (ms / 60000).toFixed(1) + "m";
+const STATUS = { queued: "Chờ", running: "Đang chạy", needs_input: "Cần bạn trả lời", review: "Chờ duyệt", done: "Xong", failed: "Lỗi", cancelled: "Huỷ" };
+const ICON = { queued: "○", running: "▶", needs_input: "?", review: "◎", done: "✓", failed: "✕", cancelled: "✕" };
+const badge = s => `<span class="badge s-${s}">${ICON[s] || ""} ${STATUS[s] || s}</span>`;
+
+let tasks = [], filter = "all", openId = null, lastEventId = 0, stats = null;
+
+// ---------- tabs ----------
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x === b));
+  ["tasks", "usage", "brain"].forEach(t => $("#tab-" + t).classList.toggle("hidden", t !== b.dataset.tab));
+  if (b.dataset.tab === "usage") loadStats();
+  if (b.dataset.tab === "brain") loadBrain();
+});
+
+// ---------- tasks ----------
+async function loadTasks() { tasks = await api("/api/tasks"); renderTasks(); }
+function renderTasks() {
+  const counts = tasks.reduce((a, t) => (a[t.status] = (a[t.status] || 0) + 1, a), {});
+  const k = [["Đang chạy", counts.running || 0], ["Chờ", counts.queued || 0],
+    ["Cần bạn", (counts.needs_input || 0) + (counts.review || 0)], ["Xong", counts.done || 0], ["Lỗi", counts.failed || 0],
+    ["Chi phí Claude", "$" + tasks.reduce((a, t) => a + (t.cost_usd || 0), 0).toFixed(2)]];
+  $("#kpis").innerHTML = k.map(([l, v]) => `<div class="kpi"><div class="v">${v}</div><div class="l">${l}</div></div>`).join("");
+  const fs = [["all", "Tất cả"], ["active", "Đang làm"], ["attention", "Cần bạn"], ["done", "Xong"], ["failed", "Lỗi"]];
+  $("#filters").innerHTML = fs.map(([v, l]) => `<button class="chip ${filter === v ? "on" : ""}" data-f="${v}">${l}</button>`).join("");
+  document.querySelectorAll("[data-f]").forEach(b => b.onclick = () => { filter = b.dataset.f; renderTasks(); });
+  const match = t => filter === "all" || (filter === "active" && ["queued", "running"].includes(t.status)) ||
+    (filter === "attention" && ["needs_input", "review"].includes(t.status)) || t.status === filter;
+  const list = tasks.filter(match);
+  $("#taskList").innerHTML = list.length ? list.map(t => `
+    <div class="task" data-id="${t.id}">
+      <div class="t">#${t.id} ${esc(t.title)}</div>
+      <div>${badge(t.status)}</div>
+      <div class="m">
+        <span>${t.agent ? (t.agent === "claude" ? "Claude" + (t.account ? " · " + esc(t.account) : "") : "Local · " + esc(t.model || "")) : "chưa phân công"}</span>
+        ${t.category ? `<span>${esc(t.category)}</span>` : ""}
+        ${t.todos && t.todos.length ? `<span>${t.todos.filter(x => x.status === "completed").length}/${t.todos.length} bước</span>` : ""}
+        <span>${dur(t.duration_ms)}</span>
+        ${t.cost_usd ? `<span>$${t.cost_usd.toFixed(3)}</span>` : ""}
+        <span class="muted">${ago(t.created_at)} trước</span>
+      </div>
+      <div class="bar"><i style="width:${Math.round((t.progress || 0) * 100)}%"></i></div>
+    </div>`).join("") : `<div class="empty">Chưa có task nào.</div>`;
+  document.querySelectorAll(".task").forEach(el => el.onclick = () => openTask(+el.dataset.id));
+}
+
+$("#fSubmit").onclick = async () => {
+  const prompt = $("#fPrompt").value.trim();
+  if (!prompt) return;
+  $("#fSubmit").disabled = true;
+  try {
+    const r = await api("/api/tasks", { prompt, workdir: $("#fWorkdir").value.trim(), agent_pref: $("#fAgent").value, verify_cmd: $("#fVerify").value.trim() });
+    $("#fMsg").textContent = r.id ? `Đã giao task #${r.id}` : r.error;
+    $("#fPrompt").value = "";
+    try { localStorage.setItem("orch.workdir", $("#fWorkdir").value.trim()); localStorage.setItem("orch.verify", $("#fVerify").value.trim()); } catch (e) {}
+    loadTasks();
+  } finally { $("#fSubmit").disabled = false; }
+};
+try { $("#fWorkdir").value = localStorage.getItem("orch.workdir") || ""; $("#fVerify").value = localStorage.getItem("orch.verify") || ""; } catch (e) {}
+
+// ---------- detail ----------
+async function openTask(id) {
+  openId = id; lastEventId = 0;
+  $("#detail").classList.add("open");
+  const t = await api("/api/tasks/" + id);
+  renderDetail(t);
+  const evs = await api(`/api/tasks/${id}/events`);
+  evs.forEach(appendEvent);
+}
+$("#detail").onclick = e => { if (e.target.id === "detail") closeDetail(); };
+function closeDetail() { $("#detail").classList.remove("open"); openId = null; }
+
+function renderDetail(t) {
+  const r = t.report || {};
+  const tcs = r.test_cases || [];
+  const saved = JSON.parse(safeGet("orch.tc." + t.id) || "{}");
+  $("#detailPanel").innerHTML = `
+    <button class="btn ghost close" onclick="closeDetail()">Đóng</button>
+    <h2 style="margin:0 0 6px;font-size:18px">#${t.id} ${esc(t.title)}</h2>
+    <div style="margin-bottom:12px">${badge(t.status)} <span class="small muted">${esc(t.route_reason || "")}</span></div>
+    <div class="bar" style="height:6px;margin-bottom:14px"><i style="width:${Math.round((t.progress || 0) * 100)}%"></i></div>
+
+    ${t.status === "needs_input" ? `<div class="card" style="border-color:var(--warn)"><h2>AI đang hỏi bạn</h2>
+      ${(r.questions || []).map(q => `<p>• ${esc(q)}</p>`).join("") || `<p>${esc(r.summary || "")}</p>`}
+      <textarea id="replyTxt" placeholder="Trả lời để AI làm tiếp…"></textarea>
+      <div class="actions"><button class="btn" onclick="reply(${t.id})">Gửi & làm tiếp</button></div></div>` : ""}
+
+    ${t.todos && t.todos.length ? `<div class="card"><h2>Tiến độ</h2>${t.todos.map(x =>
+      `<div class="todo ${x.status}"><span>${x.status === "completed" ? "✓" : x.status === "in_progress" ? "▶" : "○"}</span><span>${esc(x.content)}</span></div>`).join("")}</div>` : ""}
+
+    ${t.report ? `<div class="card"><h2>Kết quả</h2>
+      <p>${esc(r.summary)}</p>
+      <dl class="kv">
+        <dt>Input (AI hiểu là)</dt><dd>${esc(r.input || t.prompt)}</dd>
+        <dt>Output</dt><dd>${(r.output || []).map(o => "• " + esc(typeof o === "string" ? o : JSON.stringify(o))).join("<br>") || "—"}</dd>
+        ${t.changed_files && t.changed_files.length ? `<dt>File thay đổi</dt><dd>${t.changed_files.map(esc).join("<br>")}</dd>` : ""}
+        ${r.notes ? `<dt>Ghi chú</dt><dd>${esc(r.notes)}</dd>` : ""}
+      </dl></div>` : ""}
+
+    ${t.verify ? `<div class="card"><h2>Verify tự động</h2>
+      <span class="badge ${t.verify.ok ? "s-done" : "s-failed"}">${t.verify.ok ? "✓ PASS" : "✕ FAIL"}</span>
+      <code class="small">${esc(t.verify.cmd)}</code> <span class="small muted">${t.verify.sec}s</span>
+      <pre>${esc(t.verify.output)}</pre></div>` : ""}
+
+    ${tcs.length ? `<div class="card"><h2>Test case bạn cần verify (${tcs.length})</h2>
+      ${tcs.map((c, i) => `<div class="tc"><label><input type="checkbox" data-tc="${i}" ${saved[i] ? "checked" : ""}> ${esc(c.title)}</label>
+        ${(c.steps || []).length ? `<ol>${c.steps.map(s => `<li>${esc(s)}</li>`).join("")}</ol>` : ""}
+        ${c.expected ? `<div class="exp"><b>Kỳ vọng:</b> ${esc(c.expected)}</div>` : ""}</div>`).join("")}</div>` : ""}
+
+    ${["review", "done", "failed"].includes(t.status) ? `<div class="card"><h2>Duyệt</h2>
+      <textarea id="fbTxt" placeholder="Nhận xét (bắt buộc khi từ chối — AI sẽ sửa theo và hệ thống học từ đây)">${esc(t.feedback || "")}</textarea>
+      <div class="actions">
+        ${t.status !== "done" ? `<button class="btn good" onclick="review(${t.id}, true)">✓ Chấp nhận</button>` : ""}
+        <button class="btn bad" onclick="review(${t.id}, false)">✕ Từ chối & yêu cầu sửa</button>
+        <button class="btn ghost" onclick="retry(${t.id}, 'claude')">Chạy lại bằng Claude</button>
+        <button class="btn ghost" onclick="retry(${t.id}, 'local')">Chạy lại bằng local</button>
+      </div></div>` : ""}
+
+    ${["queued", "running"].includes(t.status) ? `<div class="actions" style="margin-bottom:14px"><button class="btn bad" onclick="cancelTask(${t.id})">Huỷ task</button></div>` : ""}
+
+    <div class="card"><h2>Chi tiết</h2><dl class="kv">
+      <dt>Agent</dt><dd>${esc(t.agent || "—")} ${t.account ? "· tài khoản " + esc(t.account) : ""} ${t.model ? "· " + esc(t.model) : ""}</dd>
+      <dt>Loại / độ khó</dt><dd>${esc(t.category || "—")} / ${t.complexity || "—"}</dd>
+      <dt>Workdir</dt><dd>${esc(t.workdir || "—")}</dd>
+      <dt>Token</dt><dd>${fmtN(t.input_tokens)} vào · ${fmtN(t.output_tokens)} ra</dd>
+      <dt>Chi phí</dt><dd>$${(t.cost_usd || 0).toFixed(4)} · ${t.num_turns || 0} lượt · ${dur(t.duration_ms)}</dd>
+      <dt>Session</dt><dd class="small">${esc(t.session_id || "—")}</dd>
+      <dt>Tạo / xong</dt><dd>${fmtT(t.created_at)} / ${fmtT(t.finished_at)}</dd>
+      ${t.error ? `<dt>Lỗi</dt><dd style="color:var(--bad)">${esc(t.error)}</dd>` : ""}
+    </dl><details style="margin-top:8px"><summary class="small">Prompt gốc</summary><pre>${esc(t.prompt)}</pre></details></div>
+
+    <div class="card"><h2>Hoạt động trực tiếp</h2><div class="log" id="log"></div></div>`;
+  document.querySelectorAll("[data-tc]").forEach(cb => cb.onchange = () => {
+    const s = JSON.parse(safeGet("orch.tc." + t.id) || "{}"); s[cb.dataset.tc] = cb.checked; safeSet("orch.tc." + t.id, JSON.stringify(s));
+  });
+}
+function safeGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+function safeSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+
+function describe(e) {
+  const d = e.data || {};
+  switch (e.kind) {
+    case "tool": return `${d.name} ${d.input || ""}`;
+    case "text": return d.text;
+    case "todos": return d.todos.map(t => (t.status === "completed" ? "✓ " : t.status === "in_progress" ? "▶ " : "○ ") + t.content).join("\n");
+    case "routed": return `→ ${d.agent} (${d.category}, độ khó ${d.complexity}): ${d.reason}`;
+    case "start": return d.agent === "claude" ? `Claude trên tài khoản ${d.account}${d.resume ? " (tiếp tục session)" : ""}` : `Local model ${d.model}`;
+    case "account_limit": return `Tài khoản ${d.account} chạm giới hạn, nghỉ tới ${fmtT(d.until)} → chuyển tài khoản`;
+    case "handoff": return `Chuyển session: ${d.from} → ${d.to}`;
+    case "lessons": return `Áp dụng ${d.texts.length} bài học:\n- ` + d.texts.join("\n- ");
+    case "verify": return `${d.ok ? "PASS" : "FAIL"} ${d.cmd}`;
+    case "stalled": return `Không có hoạt động trong ${d.idle_sec}s`;
+    case "result": return `${d.ok ? "OK" : "Lỗi"} (${d.subtype}) · $${(d.cost_usd || 0).toFixed(4)} · ${d.turns} lượt`;
+    default: return JSON.stringify(d);
+  }
+}
+function appendEvent(e) {
+  if (e.task_id !== openId || e.id <= lastEventId) return;
+  lastEventId = e.id;
+  const log = $("#log"); if (!log) return;
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+  const div = document.createElement("div");
+  div.innerHTML = `<span class="ts">${new Date(e.ts * 1000).toLocaleTimeString()}</span><span class="k">${esc(e.kind)}</span>${esc(describe(e))}`;
+  log.appendChild(div);
+  if (atBottom) log.scrollTop = log.scrollHeight;
+}
+async function refreshDetail() {
+  if (!openId) return;
+  const t = await api("/api/tasks/" + openId);
+  const keep = lastEventId; lastEventId = 0;
+  const log = $("#log") ? $("#log").innerHTML : "";
+  renderDetail(t);
+  $("#log").innerHTML = log; lastEventId = keep;
+}
+async function reply(id) { await api(`/api/tasks/${id}/reply`, { message: $("#replyTxt").value }); refreshDetail(); loadTasks(); }
+async function review(id, accepted) {
+  const feedback = $("#fbTxt").value.trim();
+  if (!accepted && !feedback) { $("#fbTxt").focus(); $("#fbTxt").placeholder = "Hãy ghi lý do từ chối để AI sửa và hệ thống học."; return; }
+  await api(`/api/tasks/${id}/review`, { accepted, feedback }); refreshDetail(); loadTasks();
+}
+async function retry(id, agent_pref) { await api(`/api/tasks/${id}/retry`, { agent_pref, reroute: true }); refreshDetail(); loadTasks(); }
+async function cancelTask(id) { await api(`/api/tasks/${id}/cancel`, {}); refreshDetail(); loadTasks(); }
+
+// ---------- usage ----------
+async function loadStats() {
+  stats = await api("/api/stats");
+  const now = Date.now() / 1000;
+  $("#accounts").innerHTML = stats.accounts.map(a => {
+    const cool = a.cooldown_until > now;
+    const st = !a.enabled ? `<span class="badge s-cancelled">Tắt</span>` : cool ? `<span class="badge s-review">⏸ Nghỉ tới ${new Date(a.cooldown_until * 1000).toLocaleTimeString()}</span>`
+      : a.running ? `<span class="badge s-running">▶ Đang chạy ${a.running}/${a.max_parallel}</span>` : `<span class="badge s-done">✓ Sẵn sàng</span>`;
+    return `<div class="acc"><div class="name">${esc(a.name)} ${st}</div>
+      <div class="small muted">ưu tiên ${a.priority} · ${esc(a.config_dir)}</div>
+      ${limitMeters(a)}
+      <div class="small" style="margin-top:8px">5 giờ gần nhất (qua orchestrator): ${a.window_5h.n} lần chạy · $${a.window_5h.cost.toFixed(2)} · ${fmtN(a.window_5h.inp + a.window_5h.outp)} token</div>
+      <table><tr><th></th><th>Lần chạy</th><th>Thành công</th><th>Chi phí</th><th>TB thời gian</th></tr>
+        <tr><td>7 ngày</td><td>${a.week.n}</td><td>${a.week.n ? Math.round(a.week.ok * 100) + "%" : "—"}</td><td>$${a.week.cost.toFixed(2)}</td><td>${dur(a.week.dur)}</td></tr>
+        <tr><td>Tổng</td><td>${a.all.n}</td><td>${a.all.n ? Math.round(a.all.ok * 100) + "%" : "—"}</td><td>$${a.all.cost.toFixed(2)}</td><td>${dur(a.all.dur)}</td></tr></table>
+      ${cool && a.last_error ? `<div class="small" style="color:var(--warn);margin-top:6px">${esc(a.last_error.slice(0, 160))}</div>` : ""}
+      ${cool ? `<div class="actions"><button class="btn ghost" onclick="resetAcc('${esc(a.name)}')">Dùng lại ngay</button></div>` : ""}
+    </div>`;
+  }).join("") || `<div class="empty">Chưa cấu hình tài khoản.</div>`;
+  $("#locals").innerHTML = `<p class="small">${stats.local_server_up ? "✓ Local server đang chạy" : "✕ Không kết nối được local server (Ollama)"} · đã xử lý ${stats.local_saved.n} task thay Claude (${fmtN(stats.local_saved.tokens)} token)</p>
+    <div class="table-wrap"><table><tr><th>Model</th><th>Đã cài</th><th>Task</th><th>Thành công</th><th>Token</th><th>TB thời gian</th></tr>
+    ${stats.local.map(l => `<tr><td>${esc(l.name)}</td><td>${l.installed ? "✓" : "✕"}</td><td>${l.n}</td><td>${l.n ? Math.round(l.ok * 100) + "%" : "—"}</td><td>${fmtN(l.inp + l.outp)}</td><td>${dur(l.dur)}</td></tr>`).join("")}</table></div>`;
+  drawChart(stats.daily);
+  $("#byCat").innerHTML = `<table><tr><th>Loại việc</th><th>Agent</th><th>Số lần</th><th>Thành công</th></tr>
+    ${stats.by_category.map(r => `<tr><td>${esc(r.category || "—")}</td><td>${esc(r.kind)}</td><td>${r.n}</td><td>${Math.round((r.ok || 0) * 100)}%</td></tr>`).join("")}</table>`;
+}
+function limitMeters(a) {
+  const w = (a.limits || {}).unifiedWindows || {};
+  const names = { five_hour: "Cửa sổ 5 giờ", seven_day: "7 ngày", seven_day_opus: "7 ngày (Opus)" };
+  const rows = Object.entries(w).map(([k, v]) => {
+    const expired = v.resetsAt && v.resetsAt * 1000 < Date.now();
+    const pct = expired ? 0 : Math.round((v.utilization || 0) * 100);
+    const color = pct >= 90 ? "var(--bad)" : pct >= 70 ? "var(--warn)" : "var(--series-1)";
+    return `<div class="small" style="margin-top:8px;display:flex;justify-content:space-between"><span>${names[k] || esc(k)}</span>
+      <span><b>${pct}%</b> <span class="muted">· reset ${v.resetsAt ? new Date(v.resetsAt * 1000).toLocaleString() : "?"}</span></span></div>
+      <div class="meter" role="meter" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%;background:${color}"></i></div>`;
+  }).join("");
+  return rows || `<div class="small muted" style="margin-top:8px">Chưa có số liệu giới hạn (xuất hiện sau lần chạy đầu tiên).</div>`;
+}
+async function resetAcc(n) { await api(`/api/accounts/${encodeURIComponent(n)}/reset`, {}); loadStats(); }
+
+function drawChart(rows) {
+  const days = [];
+  for (let i = 13; i >= 0; i--) { const d = new Date(Date.now() - i * 864e5); days.push(d.toLocaleDateString("sv-SE")); }
+  const val = (day, kind) => (rows.find(r => r.day === day && r.kind === kind) || {}).tokens || 0;
+  const data = days.map(d => ({ d, c: val(d, "claude"), l: val(d, "local") }));
+  const max = Math.max(1, ...data.map(x => x.c + x.l));
+  const W = Math.max(320, $("#chart").clientWidth || 700), Hh = 180, pad = 34, bw = (W - pad) / days.length;
+  let svg = `<svg viewBox="0 0 ${W} ${Hh + 22}" width="100%" role="img" aria-label="Token theo ngày">`;
+  [0, .5, 1].forEach(f => { const y = Hh - f * (Hh - 10); svg += `<line x1="${pad}" x2="${W}" y1="${y}" y2="${y}" stroke="var(--border)"/><text x="0" y="${y + 4}" font-size="10" fill="var(--muted)">${fmtN(max * f)}</text>`; });
+  data.forEach((x, i) => {
+    const X = pad + i * bw + bw * .2, w = bw * .6, hc = x.c / max * (Hh - 10), hl = x.l / max * (Hh - 10);
+    const gap = hc && hl ? 2 : 0;
+    if (hc) svg += `<rect x="${X}" y="${Hh - hc}" width="${w}" height="${hc}" rx="3" fill="var(--series-1)"/>`;
+    if (hl) svg += `<rect x="${X}" y="${Hh - hc - hl - gap}" width="${w}" height="${Math.max(0, hl)}" rx="3" fill="var(--series-2)"/>`;
+    svg += `<rect x="${pad + i * bw}" y="0" width="${bw}" height="${Hh}" fill="transparent" data-tip="${x.d}|${x.c}|${x.l}"/>`;
+    if (i % 2 === 0) svg += `<text x="${X + w / 2}" y="${Hh + 16}" font-size="10" text-anchor="middle" fill="var(--muted)">${x.d.slice(5)}</text>`;
+  });
+  $("#chart").innerHTML = svg + "</svg>";
+  const tip = $("#tip");
+  $("#chart").querySelectorAll("[data-tip]").forEach(r => {
+    r.onmousemove = e => { const [d, c, l] = r.dataset.tip.split("|"); tip.style.display = "block"; tip.style.left = e.clientX + 12 + "px"; tip.style.top = e.clientY + 12 + "px"; tip.innerHTML = `<b>${d}</b><br>Claude: ${fmtN(+c)}<br>Local: ${fmtN(+l)}`; };
+    r.onmouseleave = () => tip.style.display = "none";
+  });
+  $("#chartTable").innerHTML = `<table><tr><th>Ngày</th><th>Claude</th><th>Local</th></tr>${data.map(x => `<tr><td>${x.d}</td><td>${fmtN(x.c)}</td><td>${fmtN(x.l)}</td></tr>`).join("")}</table>`;
+}
+
+// ---------- brain ----------
+async function loadBrain() {
+  const [lessons, perms] = await Promise.all([api("/api/lessons"), api("/api/permissions")]);
+  $("#lessons").innerHTML = lessons.length ? lessons.map(l => `<div class="lesson ${l.enabled ? "" : "off"}">
+    <div class="txt">${esc(l.text)}<div class="small muted">${esc(l.scope)} · điểm ${l.score.toFixed(1)} · dùng ${l.uses} lần${l.source_task ? " · từ task #" + l.source_task : ""}</div></div>
+    <button class="btn ghost" onclick="lesson(${l.id}, {enabled: ${l.enabled ? 0 : 1}})">${l.enabled ? "Tắt" : "Bật"}</button>
+    <button class="btn ghost" onclick="lesson(${l.id}, {delete: 1})">Xoá</button></div>`).join("") : `<div class="empty">Chưa có bài học. Hệ thống sẽ tự rút ra sau mỗi task.</div>`;
+  $("#perms").innerHTML = perms.length ? `<table><tr><th>Quy tắc</th><th>Bị chặn</th><th>Trạng thái</th><th></th></tr>${perms.map(p => `<tr><td><code>${esc(p.rule)}</code></td><td>${p.count} lần</td><td>${esc(p.status)}</td>
+    <td>${p.status === "pending" ? `<button class="btn good" onclick="perm(${p.id}, true)">Cho phép</button> <button class="btn ghost" onclick="perm(${p.id}, false)">Bỏ qua</button>` : ""}</td></tr>`).join("")}</table>` : `<div class="empty">Chưa có tool nào bị chặn.</div>`;
+}
+async function lesson(id, body) { await api("/api/lessons/" + id, body); loadBrain(); }
+async function perm(id, approve) { await api("/api/permissions/" + id, { approve }); loadBrain(); }
+$("#lAdd").onclick = async () => { const text = $("#lText").value.trim(); if (!text) return; await api("/api/lessons", { text, scope: $("#lScope").value.trim() || "global" }); $("#lText").value = ""; loadBrain(); };
+
+// ---------- live stream ----------
+let refreshTimer = null;
+function connect() {
+  const es = new EventSource("/api/stream" + (TOKEN ? "?token=" + encodeURIComponent(TOKEN) : ""));
+  es.onopen = () => { $("#liveDot").classList.add("on"); $("#liveTxt").textContent = "live"; };
+  es.onerror = () => { $("#liveDot").classList.remove("on"); $("#liveTxt").textContent = "mất kết nối…"; };
+  es.onmessage = m => {
+    const msg = JSON.parse(m.data);
+    if (msg.type === "event") appendEvent(msg.event);
+    if (msg.type === "stats" && !$("#tab-usage").classList.contains("hidden")) loadStats();
+    if (msg.type === "task") {
+      const i = tasks.findIndex(t => t.id === msg.task.id);
+      if (i >= 0) tasks[i] = msg.task; else tasks.unshift(msg.task);
+      clearTimeout(refreshTimer); refreshTimer = setTimeout(renderTasks, 150);
+      if (msg.task.id === openId) refreshDetail();
+    }
+  };
+}
+loadTasks(); connect();
+setInterval(loadTasks, 15000);
+</script>
+</body>
+</html>
