@@ -17,6 +17,28 @@ def _words(s):
     return {w.lower() for w in _WORD.findall(s or "")}
 
 
+# Commands that must never be allow-listed wholesale, however often they get blocked.
+DANGEROUS = {"rm", "sudo", "su", "dd", "mkfs", "chmod", "chown", "curl", "wget", "ssh", "scp",
+             "rsync", "kill", "pkill", "killall", "shutdown", "reboot", "eval", "sh", "bash", "zsh",
+             "python", "python3", "node", "docker", "kubectl", "terraform", "aws", "gcloud", "az"}
+DANGEROUS_SUB = {("git", "push"), ("git", "reset"), ("git", "clean"), ("npm", "publish")}
+
+
+def suggest_rule(tool, inp):
+    """Turn a blocked tool call into the narrowest useful allow rule, or None when the call is
+    too dangerous to allow in bulk (those stay under auto mode's per-call judgement)."""
+    if tool != "Bash":
+        return tool
+    cmd = (inp.get("command") or "").strip()
+    if not cmd or any(c in cmd for c in ("|", ";", "&&", "||", "`", "$(", ">")):
+        return None  # compound commands can smuggle anything behind an innocent prefix
+    words = cmd.split()
+    if words[0] in DANGEROUS or tuple(words[:2]) in DANGEROUS_SUB:
+        return None
+    prefix = " ".join(words[:2]) if len(words) > 1 and not words[1].startswith("-") else words[0]
+    return f"Bash({prefix}:*)"
+
+
 class Learner:
     def __init__(self, cfg, db, local):
         self.cfg = cfg
@@ -28,7 +50,8 @@ class Learner:
         if not self.cfg["learning"]["enabled"]:
             return []
         rows = self.db.query(
-            "SELECT * FROM lessons WHERE enabled=1 AND (scope='global' OR scope=?)", (workdir or "",))
+            "SELECT * FROM lessons WHERE enabled=1 AND pending=0 AND (scope='global' OR scope=?)",
+            (workdir or "",))
         q = _words(prompt)
         scored = []
         for r in rows:
@@ -49,7 +72,7 @@ class Learner:
         return f"Lessons learned from previous tasks (follow them unless clearly wrong):\n{lines}"
 
     # -- learning after a task ---------------------------------------------------
-    def add_lesson(self, text, scope="global", tags=(), source_task=None, score=1.0):
+    def add_lesson(self, text, scope="global", tags=(), source_task=None, score=1.0, pending=False):
         text = (text or "").strip()
         if not text:
             return None
@@ -58,16 +81,15 @@ class Learner:
             self.db.execute("UPDATE lessons SET score=score+0.5 WHERE id=?", (dup["id"],))
             return dup["id"]
         return self.db.execute(
-            "INSERT INTO lessons (scope, text, tags, source_task, score, created_at) VALUES (?,?,?,?,?,?)",
-            (scope, text, json.dumps(list(tags)), source_task, score, time.time()))
+            "INSERT INTO lessons (scope, text, tags, source_task, score, created_at, pending) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (scope, text, json.dumps(list(tags)), source_task, score, time.time(), 1 if pending else 0))
 
     def record_permission_denials(self, task_id, denials):
         for d in denials or []:
-            tool = d.get("tool_name") or "?"
-            inp = d.get("tool_input") or {}
-            rule = tool
-            if tool == "Bash" and inp.get("command"):
-                rule = f"Bash({inp['command'].split()[0]} *)"
+            rule = suggest_rule(d.get("tool_name") or "?", d.get("tool_input") or {})
+            if not rule:
+                continue
             self.db.execute(
                 "INSERT INTO permission_suggestions (rule, last_task) VALUES (?,?) "
                 "ON CONFLICT(rule) DO UPDATE SET count=count+1, last_task=excluded.last_task",
@@ -104,7 +126,9 @@ class Learner:
             for l in (out or {}).get("lessons", [])[:4]:
                 if isinstance(l, dict) and l.get("text"):
                     scope = workdir if l.get("scope") == "project" and workdir else "global"
-                    added.append(self.add_lesson(l["text"], scope, l.get("tags") or [], task["id"]))
+                    added.append(self.add_lesson(
+                        l["text"], scope, l.get("tags") or [], task["id"],
+                        pending=not self.cfg["learning"].get("auto_approve_llm_lessons")))
         return [a for a in added if a]
 
     def feedback(self, task, accepted):

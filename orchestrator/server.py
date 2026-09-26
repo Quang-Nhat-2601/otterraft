@@ -1,4 +1,5 @@
 """HTTP API + Server-Sent Events + static dashboard. Standard library only."""
+import hmac
 import json
 import queue
 import time
@@ -62,12 +63,10 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- plumbing ----------------------------------------------------------------
     def _authed(self):
-        token = self.orch.cfg.get("auth_token")
-        if not token:
-            return True
+        token = self.orch.cfg["auth_token"]
         q = parse_qs(urlparse(self.path).query)
-        return q.get("token", [""])[0] == token or \
-            self.headers.get("Authorization", "") == f"Bearer {token}"
+        given = self.headers.get("Authorization", "").removeprefix("Bearer ") or q.get("token", [""])[0]
+        return hmac.compare_digest(given.encode(), token.encode())
 
     def _send(self, code, body, ctype="application/json"):
         if not isinstance(body, (bytes, str)):
@@ -105,7 +104,7 @@ class Handler(BaseHTTPRequestHandler):
         if p == "/api/stats":
             return self._send(200, stats(o))
         if p == "/api/lessons":
-            return self._send(200, o.db.query("SELECT * FROM lessons ORDER BY enabled DESC, score DESC, id DESC"))
+            return self._send(200, o.db.query("SELECT * FROM lessons ORDER BY pending DESC, enabled DESC, score DESC, id DESC"))
         if p == "/api/permissions":
             return self._send(200, o.db.query("SELECT * FROM permission_suggestions ORDER BY count DESC"))
         if p == "/api/stream":
@@ -115,6 +114,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self._authed():
             return self._send(401, {"error": "unauthorized"})
+        if not (self.headers.get("Content-Type") or "").startswith("application/json"):
+            return self._send(415, {"error": "Content-Type must be application/json"})
         o, p = self.orch, urlparse(self.path).path
         try:
             b = self._body()
@@ -156,6 +157,8 @@ class Handler(BaseHTTPRequestHandler):
             lid = int(parts[2])
             if b.get("delete"):
                 o.db.execute("DELETE FROM lessons WHERE id=?", (lid,))
+            elif b.get("approve"):
+                o.db.execute("UPDATE lessons SET pending=0, enabled=1 WHERE id=?", (lid,))
             else:
                 o.db.execute("UPDATE lessons SET enabled=? WHERE id=?", (1 if b.get("enabled") else 0, lid))
             return self._send(200, {"ok": True})

@@ -4,6 +4,7 @@ import threading
 import time
 import traceback
 import urllib.request
+from pathlib import Path
 
 from .accounts import AccountPool
 from .agents.claude import ClaudeRun, handoff_session
@@ -28,6 +29,7 @@ class Orchestrator:
         self.lock = threading.Lock()
         self.stop = threading.Event()
         self.stall_flagged = set()
+        self.routing = set()      # task ids being classified off the scheduler thread
         # Tasks left "running" by a previous crash go back to the queue.
         db.execute("UPDATE tasks SET status='queued' WHERE status='running'")
 
@@ -110,12 +112,28 @@ class Orchestrator:
         for task in self.db.query("SELECT * FROM tasks WHERE status='queued' ORDER BY id"):
             self._try_start(task)
 
-    def _try_start(self, task):
-        if not task.get("agent"):
+    def _route(self, task):
+        """Classification may call a local LLM (seconds), so it runs off the scheduler thread."""
+        try:
             agent, cat, cx, reason = self.router.route(task)
             self.db.update_task(task["id"], agent=agent, category=cat, complexity=cx, route_reason=reason)
             self.emit(task["id"], "routed", {"agent": agent, "category": cat, "complexity": cx,
                                              "reason": reason})
+        finally:
+            self.routing.discard(task["id"])
+
+    def _try_start(self, task):
+        if task["id"] in self.routing:
+            return
+        if not task.get("agent"):
+            self.routing.add(task["id"])
+            threading.Thread(target=self._route, args=(task,), daemon=True).start()
+            return
+        if not task.get("workdir"):
+            # Never let an agent loose in the orchestrator's own directory.
+            wd = Path(self.cfg["data_dir"]) / "workspaces" / f"task-{task['id']}"
+            wd.mkdir(parents=True, exist_ok=True)
+            self.db.update_task(task["id"], workdir=str(wd))
             task = self.db.task(task["id"])
         wd = task.get("workdir") or ""
         with self.lock:
@@ -249,7 +267,8 @@ class Orchestrator:
                             duration_ms=(cur["duration_ms"] or 0) + out["duration_ms"])
         self.db.add_usage(task_id=tid, kind="local", name=model["name"], model=model["name"], cost_usd=0,
                           input_tokens=out["input_tokens"], output_tokens=out["output_tokens"],
-                          duration_ms=out["duration_ms"], ok=1 if ok else 0, category=task.get("category"))
+                          duration_ms=out["duration_ms"], ok=None if ok else 0,  # review decides
+                          category=task.get("category"))
         if not ok and self.cfg["local"]["escalate_to_claude"] and self.pool.accounts:
             self.db.update_task(tid, status="queued", agent="claude", agent_pref="claude",
                                 route_reason=f"escalated from local: {err}")
@@ -267,6 +286,9 @@ class Orchestrator:
         verify = run_verify(task) if ok and task.get("verify_cmd") else None
         if verify:
             self.emit(tid, "verify", verify)
+            if not verify["ok"]:
+                self.db.execute("UPDATE usage SET ok=0 WHERE id=(SELECT MAX(id) FROM usage WHERE task_id=?)",
+                                (tid,))
         if not ok:
             status = "failed"
         elif report and report.get("status") == "needs_input":

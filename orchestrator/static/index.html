@@ -116,6 +116,7 @@ th { color: var(--text-2); font-weight: 600; font-size: 12px; }
 #tip { position: fixed; pointer-events: none; background: var(--text); color: var(--bg); font-size: 12px; padding: 6px 8px; border-radius: 6px; display: none; z-index: 20; }
 .lesson { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-bottom: 1px solid var(--border); }
 .lesson .txt { flex: 1; } .lesson.off .txt { color: var(--muted); text-decoration: line-through; }
+.lesson.pending .txt { font-style: italic; }
 .hidden { display: none !important; }
 .empty { color: var(--muted); padding: 16px; text-align: center; }
 </style>
@@ -166,6 +167,7 @@ th { color: var(--text-2); font-weight: 600; font-size: 12px; }
   <section id="tab-brain" class="hidden">
     <div class="card">
       <h2>Bài học đã học (được chèn vào prompt các task sau)</h2>
+      <p class="small muted">Bài học do AI tự rút ra phải được bạn duyệt trước khi dùng, để một bài học sai (hoặc bị cài cắm từ nội dung trong repo) không lái mọi task sau.</p>
       <div class="row" style="grid-template-columns: 3fr 1fr auto; align-items:end">
         <div><label>Thêm bài học thủ công</label><input id="lText" placeholder="vd: Dự án này dùng pnpm, không dùng npm"></div>
         <div><label>Phạm vi</label><input id="lScope" placeholder="global hoặc /path/dự-án"></div>
@@ -185,11 +187,21 @@ th { color: var(--text-2); font-weight: 600; font-size: 12px; }
 <div id="tip"></div>
 
 <script>
-const TOKEN = new URLSearchParams(location.search).get("token") || "";
+const TOKEN = (() => {
+  let t = new URLSearchParams(location.search).get("token");
+  try { if (t) localStorage.setItem("orch.token", t); else t = localStorage.getItem("orch.token"); } catch (e) {}
+  if (!t) t = prompt("Nhập token của orchestrator (in ra khi chạy `serve`):") || "";
+  try { localStorage.setItem("orch.token", t); } catch (e) {}
+  if (new URLSearchParams(location.search).has("token")) history.replaceState(null, "", location.pathname);
+  return t;
+})();
 const H = TOKEN ? { Authorization: "Bearer " + TOKEN } : {};
 const api = (p, body) => fetch(p, body === undefined ? { headers: H } :
   { method: "POST", headers: { ...H, "Content-Type": "application/json" }, body: JSON.stringify(body) })
-  .then(r => r.json());
+  .then(r => {
+    if (r.status === 401) { try { localStorage.removeItem("orch.token"); } catch (e) {} $("#liveTxt").textContent = "sai token — tải lại trang"; }
+    return r.json();
+  });
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const fmtN = n => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(Math.round(n || 0));
@@ -216,7 +228,7 @@ function renderTasks() {
   const counts = tasks.reduce((a, t) => (a[t.status] = (a[t.status] || 0) + 1, a), {});
   const k = [["Đang chạy", counts.running || 0], ["Chờ", counts.queued || 0],
     ["Cần bạn", (counts.needs_input || 0) + (counts.review || 0)], ["Xong", counts.done || 0], ["Lỗi", counts.failed || 0],
-    ["Chi phí Claude", "$" + tasks.reduce((a, t) => a + (t.cost_usd || 0), 0).toFixed(2)]];
+    ["Chi phí quy đổi API", "$" + tasks.reduce((a, t) => a + (t.cost_usd || 0), 0).toFixed(2)]];
   $("#kpis").innerHTML = k.map(([l, v]) => `<div class="kpi"><div class="v">${v}</div><div class="l">${l}</div></div>`).join("");
   const fs = [["all", "Tất cả"], ["active", "Đang làm"], ["attention", "Cần bạn"], ["done", "Xong"], ["failed", "Lỗi"]];
   $("#filters").innerHTML = fs.map(([v, l]) => `<button class="chip ${filter === v ? "on" : ""}" data-f="${v}">${l}</button>`).join("");
@@ -320,7 +332,7 @@ function renderDetail(t) {
       <dt>Loại / độ khó</dt><dd>${esc(t.category || "—")} / ${t.complexity || "—"}</dd>
       <dt>Workdir</dt><dd>${esc(t.workdir || "—")}</dd>
       <dt>Token</dt><dd>${fmtN(t.input_tokens)} vào · ${fmtN(t.output_tokens)} ra</dd>
-      <dt>Chi phí</dt><dd>$${(t.cost_usd || 0).toFixed(4)} · ${t.num_turns || 0} lượt · ${dur(t.duration_ms)}</dd>
+      <dt>Quy đổi API</dt><dd>$${(t.cost_usd || 0).toFixed(4)} · ${t.num_turns || 0} lượt · ${dur(t.duration_ms)}</dd>
       <dt>Session</dt><dd class="small">${esc(t.session_id || "—")}</dd>
       <dt>Tạo / xong</dt><dd>${fmtT(t.created_at)} / ${fmtT(t.finished_at)}</dd>
       ${t.error ? `<dt>Lỗi</dt><dd style="color:var(--bad)">${esc(t.error)}</dd>` : ""}
@@ -366,8 +378,14 @@ async function refreshDetail() {
   const t = await api("/api/tasks/" + openId);
   const keep = lastEventId; lastEventId = 0;
   const log = $("#log") ? $("#log").innerHTML : "";
+  const drafts = {}, focused = document.activeElement && document.activeElement.id;
+  ["replyTxt", "fbTxt"].forEach(id => { if ($("#" + id)) drafts[id] = $("#" + id).value; });
+  const scroll = $("#detailPanel").scrollTop;
   renderDetail(t);
   $("#log").innerHTML = log; lastEventId = keep;
+  Object.entries(drafts).forEach(([id, v]) => { if ($("#" + id) && v) $("#" + id).value = v; });
+  if (focused && $("#" + focused)) $("#" + focused).focus();
+  $("#detailPanel").scrollTop = scroll;
 }
 async function reply(id) { await api(`/api/tasks/${id}/reply`, { message: $("#replyTxt").value }); refreshDetail(); loadTasks(); }
 async function review(id, accepted) {
@@ -390,7 +408,7 @@ async function loadStats() {
       <div class="small muted">ưu tiên ${a.priority} · ${esc(a.config_dir)}</div>
       ${limitMeters(a)}
       <div class="small" style="margin-top:8px">5 giờ gần nhất (qua orchestrator): ${a.window_5h.n} lần chạy · $${a.window_5h.cost.toFixed(2)} · ${fmtN(a.window_5h.inp + a.window_5h.outp)} token</div>
-      <table><tr><th></th><th>Lần chạy</th><th>Thành công</th><th>Chi phí</th><th>TB thời gian</th></tr>
+      <table><tr><th></th><th>Lần chạy</th><th>Thành công</th><th>Quy đổi API</th><th>TB thời gian</th></tr>
         <tr><td>7 ngày</td><td>${a.week.n}</td><td>${a.week.n ? Math.round(a.week.ok * 100) + "%" : "—"}</td><td>$${a.week.cost.toFixed(2)}</td><td>${dur(a.week.dur)}</td></tr>
         <tr><td>Tổng</td><td>${a.all.n}</td><td>${a.all.n ? Math.round(a.all.ok * 100) + "%" : "—"}</td><td>$${a.all.cost.toFixed(2)}</td><td>${dur(a.all.dur)}</td></tr></table>
       ${cool && a.last_error ? `<div class="small" style="color:var(--warn);margin-top:6px">${esc(a.last_error.slice(0, 160))}</div>` : ""}
@@ -448,9 +466,10 @@ function drawChart(rows) {
 // ---------- brain ----------
 async function loadBrain() {
   const [lessons, perms] = await Promise.all([api("/api/lessons"), api("/api/permissions")]);
-  $("#lessons").innerHTML = lessons.length ? lessons.map(l => `<div class="lesson ${l.enabled ? "" : "off"}">
-    <div class="txt">${esc(l.text)}<div class="small muted">${esc(l.scope)} · điểm ${l.score.toFixed(1)} · dùng ${l.uses} lần${l.source_task ? " · từ task #" + l.source_task : ""}</div></div>
-    <button class="btn ghost" onclick="lesson(${l.id}, {enabled: ${l.enabled ? 0 : 1}})">${l.enabled ? "Tắt" : "Bật"}</button>
+  $("#lessons").innerHTML = lessons.length ? lessons.map(l => `<div class="lesson ${l.pending ? "pending" : l.enabled ? "" : "off"}">
+    <div class="txt">${l.pending ? `<span class="badge s-review">◎ Chờ duyệt</span> ` : ""}${esc(l.text)}<div class="small muted">${esc(l.scope)} · điểm ${l.score.toFixed(1)} · dùng ${l.uses} lần${l.source_task ? " · từ task #" + l.source_task : ""}</div></div>
+    ${l.pending ? `<button class="btn good" onclick="lesson(${l.id}, {approve: 1})">Duyệt</button>`
+      : `<button class="btn ghost" onclick="lesson(${l.id}, {enabled: ${l.enabled ? 0 : 1}})">${l.enabled ? "Tắt" : "Bật"}</button>`}
     <button class="btn ghost" onclick="lesson(${l.id}, {delete: 1})">Xoá</button></div>`).join("") : `<div class="empty">Chưa có bài học. Hệ thống sẽ tự rút ra sau mỗi task.</div>`;
   $("#perms").innerHTML = perms.length ? `<table><tr><th>Quy tắc</th><th>Bị chặn</th><th>Trạng thái</th><th></th></tr>${perms.map(p => `<tr><td><code>${esc(p.rule)}</code></td><td>${p.count} lần</td><td>${esc(p.status)}</td>
     <td>${p.status === "pending" ? `<button class="btn good" onclick="perm(${p.id}, true)">Cho phép</button> <button class="btn ghost" onclick="perm(${p.id}, false)">Bỏ qua</button>` : ""}</td></tr>`).join("")}</table>` : `<div class="empty">Chưa có tool nào bị chặn.</div>`;

@@ -102,6 +102,14 @@ Bạn có thể khai báo nhiều model, mỗi model đảm nhận một vai tr�
 
 Không có model local cũng được: mọi task sẽ đi Claude, router dùng heuristic, và bài học được rút theo luật.
 
+### Skills, CLAUDE.md, hooks, MCP của bạn
+
+Claude chạy dưới orchestrator vẫn là Claude Code đầy đủ, nên nó **tự dùng skills** trong `~/.claude/skills` và `.claude/skills` của dự án, cùng CLAUDE.md, hooks, plugins và MCP servers.
+
+Riêng các tài khoản có `config_dir` riêng: Claude Code chỉ đọc skills và cấu hình trong thư mục đó. Vì vậy khi chạy `serve` hoặc `login`, orchestrator tạo symlink `skills/`, `agents/`, `commands/`, `plugins/`, `CLAUDE.md`, `settings.json` từ `~/.claude` sang từng tài khoản, và chép phần `mcpServers` (không đụng tới thông tin đăng nhập). Nếu tài khoản đã có file riêng, orchestrator giữ nguyên và báo trong `doctor` để bạn tự gộp.
+
+Model local (Ollama) thì **không** dùng được skills: nó chỉ trả lời văn bản, không có tool để đọc file hay chạy lệnh.
+
 ### 4. Kiểm tra rồi chạy
 
 ```bash
@@ -144,13 +152,15 @@ python3 -m orchestrator accounts    # xem trạng thái các tài khoản
 | `router.min_local_success` | 0.6 | Nếu tỉ lệ thành công của local thấp hơn mức này, loại việc đó chuyển sang Claude |
 | `notify.ntfy_url` | "" | vd `https://ntfy.sh/ten-bi-mat-cua-ban`; cài app ntfy trên điện thoại để nhận thông báo |
 | `auto_accept` | false | true = task verify PASS thì tự chuyển sang Xong |
-| `auth_token` | "" | Bắt buộc đặt nếu mở dashboard ra ngoài `127.0.0.1` |
+| `auth_token` | tự sinh | API luôn yêu cầu token. Để trống thì hệ thống tự sinh và lưu ở `~/.ai-orchestrator/token`; `serve` in ra link có sẵn token |
+| `shared_config_dir` | `~/.claude` | Skills, agents, commands, plugins, CLAUDE.md, settings.json (hooks) và MCP servers ở đây được liên kết sang mọi tài khoản |
+| `learning.auto_approve_llm_lessons` | false | Bài học do model tự rút ra phải chờ bạn duyệt |
 
 ## Xem dashboard từ điện thoại
 
 Dashboard mặc định chỉ nghe ở `127.0.0.1`. Để xem từ điện thoại:
 
-1. Đặt `"auth_token": "một-chuỗi-dài-ngẫu-nhiên"`.
+1. Lấy token trong link mà `serve` in ra (hoặc trong file `~/.ai-orchestrator/token`).
 2. Cài [Tailscale](https://tailscale.com) trên cả máy tính và điện thoại, đặt `"host": "0.0.0.0"`.
 3. Mở `http://<tên-máy-tailscale>:8787/?token=...`.
 
@@ -169,6 +179,9 @@ Dashboard mặc định chỉ nghe ở `127.0.0.1`. Để xem từ điện tho�
 - Handoff session hoạt động bằng cách copy transcript `projects/<dự án>/<session>.jsonl` sang thư mục config của tài khoản kia. Nếu copy thất bại, task chạy lại từ đầu kèm ghi chú "kiểm tra working tree để thấy tiến độ dở dang".
 - Trên macOS, token đăng nhập nằm trong Keychain, nên `doctor` có thể báo `??` dù bạn đã đăng nhập. Chạy thử một task là biết.
 - Auto mode vẫn có thể chạy lệnh trên máy bạn. Nên dùng git, và với dự án quan trọng thì đặt `verify_cmd` để luôn có kiểm tra tự động.
+- `verify_cmd` là lệnh shell chạy thẳng trên máy bạn. Ai có token là chạy được lệnh, nên hãy giữ token như mật khẩu.
+- Task không ghi workdir sẽ chạy trong thư mục riêng `~/.ai-orchestrator/workspaces/task-<id>`.
+- Đề xuất quyền không bao giờ gợi ý cho phép hàng loạt các lệnh nguy hiểm (`rm`, `sudo`, `curl`, `git push`…) hay lệnh ghép (`|`, `&&`, `;`). Những lệnh đó vẫn do auto mode xét từng lần.
 
 ## Phát triển
 

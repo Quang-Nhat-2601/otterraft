@@ -1,18 +1,22 @@
 """Claude account pool: picks an account that is enabled, not cooling down, and has a free slot."""
 import json
+import os
 import re
+import shutil
 import threading
 import time
+from pathlib import Path
 
 LIMIT_RE = re.compile(
-    r"usage limit|rate.?limit|hit your limit|limit reached|out of (extra )?usage|"
-    r"quota|too many requests|\b429\b|credit balance is too low", re.I)
+    r"usage limit reached|hit your limit|(5-hour|five-hour|weekly|session|opus) limit reached|"
+    r"out of extra usage|rate_limit_error|\b429\b|credit balance is too low", re.I)
 EPOCH_RE = re.compile(r"\|(\d{10})\b")
 
 
 def detect_limit(text):
-    """Return (is_limit, reset_epoch_or_None) for an error/result message."""
-    if not text or not LIMIT_RE.search(text):
+    """Return (is_limit, reset_epoch_or_None) for a CLI error message. Limit messages are short;
+    long text is the model's own prose (e.g. a task *about* rate limiting) and is ignored."""
+    if not text or len(text) > 600 or not LIMIT_RE.search(text):
         return False, None
     m = EPOCH_RE.search(text)
     return True, (int(m.group(1)) if m else None)
@@ -91,3 +95,81 @@ class AccountPool:
         """Earliest time any account comes out of cooldown (for the UI)."""
         times = [self.state(a["name"])["cooldown_until"] for a in self.accounts]
         return min(times) if times else None
+
+
+# Everything that shapes how Claude Code works, except the login itself.
+SHARED_ITEMS = ["skills", "agents", "commands", "output-styles", "plugins", "CLAUDE.md", "settings.json"]
+
+
+def _main_state_file(shared_dir):
+    """~/.claude.json lives next to ~/.claude by default, inside the dir when CLAUDE_CONFIG_DIR is set."""
+    inside = Path(shared_dir) / ".claude.json"
+    return inside if inside.exists() else Path(shared_dir).parent / ".claude.json"
+
+
+def sync_shared(cfg, dry_run=False):
+    """Link the shared config into each account's CLAUDE_CONFIG_DIR, so every account sees the
+    same skills, CLAUDE.md, hooks, plugins and MCP servers. Never overwrites a real file or
+    folder the account already has; reports it instead. Returns human-readable lines."""
+    src = Path(cfg["shared_config_dir"])
+    out = []
+    if not src.is_dir():
+        return [f"[--] shared config dir {src} not found; nothing to share"]
+    for acc in cfg["accounts"]:
+        if not acc.get("config_dir"):
+            continue
+        dst = Path(acc["config_dir"])
+        if dst.resolve() == src.resolve():
+            continue
+        linked, conflicts, missing = [], [], []
+        for item in SHARED_ITEMS:
+            s, d = src / item, dst / item
+            if not s.exists():
+                continue
+            if d.is_symlink() and d.resolve() == s.resolve():
+                linked.append(item)
+            elif d.exists() or d.is_symlink():
+                conflicts.append(item)
+            elif dry_run:
+                missing.append(item)
+            else:
+                dst.mkdir(parents=True, exist_ok=True)
+                try:
+                    d.symlink_to(s, target_is_directory=s.is_dir())
+                except OSError:  # e.g. Windows without symlink rights: fall back to a copy
+                    (shutil.copytree if s.is_dir() else shutil.copy2)(s, d)
+                linked.append(item)
+        mcp = _sync_mcp(src, dst, dry_run)
+        mark = "ok" if not missing and not conflicts else "??"
+        line = f"[{mark}] account {acc['name']}: shared {', '.join(linked) or 'nothing'}"
+        if mcp:
+            line += f"; MCP servers: {mcp}"
+        if missing:
+            line += f"; not linked yet: {', '.join(missing)} (run serve/login to link)"
+        if conflicts:
+            line += f"; has its own {', '.join(conflicts)} (left untouched, merge by hand)"
+        out.append(line)
+    return out
+
+
+def _sync_mcp(src, dst, dry_run):
+    """Copy user-level mcpServers into the account's .claude.json (created by /login).
+    Only that key is touched; the file also holds the account's own identity."""
+    s_file, d_file = _main_state_file(src), dst / ".claude.json"
+    if not s_file.exists() or not d_file.exists():
+        return ""
+    try:
+        servers = json.loads(s_file.read_text()).get("mcpServers") or {}
+        state = json.loads(d_file.read_text())
+    except ValueError:
+        return "unreadable .claude.json"
+    if not servers:
+        return ""
+    have = state.get("mcpServers") or {}
+    new = {k: v for k, v in servers.items() if k not in have}
+    if new and not dry_run:
+        state["mcpServers"] = {**have, **new}
+        tmp = d_file.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(state, indent=2))
+        os.replace(tmp, d_file)
+    return f"{len(servers)} ({len(new)} {'to add' if dry_run else 'added'})"

@@ -40,13 +40,18 @@ CREATE TABLE IF NOT EXISTS lessons (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     scope TEXT,             -- 'global' or a workdir path
     text TEXT, tags TEXT, source_task INTEGER,
-    score REAL DEFAULT 1, uses INTEGER DEFAULT 0, enabled INTEGER DEFAULT 1, created_at REAL
+    score REAL DEFAULT 1, uses INTEGER DEFAULT 0, enabled INTEGER DEFAULT 1, created_at REAL,
+    pending INTEGER DEFAULT 0   -- 1 = written by a model, waiting for the user's approval
 );
 CREATE TABLE IF NOT EXISTS permission_suggestions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     rule TEXT UNIQUE, count INTEGER DEFAULT 1, status TEXT DEFAULT 'pending', last_task INTEGER
 );
 """
+
+# Columns added after the first release, for databases created by an older version.
+MIGRATIONS = [("account_state", "limits TEXT"), ("account_state", "limits_at REAL"),
+              ("lessons", "pending INTEGER DEFAULT 0")]
 
 JSON_FIELDS = {"todos", "report", "verify", "changed_files", "data", "tags", "limits"}
 
@@ -60,6 +65,12 @@ class DB:
         with self.lock:
             self.conn.execute("PRAGMA journal_mode=WAL")
             self.conn.executescript(SCHEMA)
+            for table, col in MIGRATIONS:
+                try:
+                    self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {col}")
+                except sqlite3.OperationalError:
+                    pass  # already there
+            self.conn.commit()
 
     # -- helpers -------------------------------------------------------------
     def _row(self, row):

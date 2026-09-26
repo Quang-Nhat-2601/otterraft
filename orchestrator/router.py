@@ -62,7 +62,7 @@ class Router:
         return out
 
     def success_rate(self, kind, category):
-        row = self.db.one("SELECT COUNT(*) n, AVG(ok) rate FROM usage WHERE kind=? AND category=?",
+        row = self.db.one("SELECT COUNT(ok) n, AVG(ok) rate FROM usage WHERE kind=? AND category=?",
                           (kind, category))
         return (row["n"] or 0), (row["rate"] if row["rate"] is not None else None)
 

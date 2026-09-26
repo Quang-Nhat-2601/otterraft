@@ -2,15 +2,20 @@
 import copy
 import json
 import os
+import secrets
 from pathlib import Path
 
 DEFAULTS = {
     "host": "127.0.0.1",
     "port": 8787,
-    # If set, the dashboard/API require ?token=... or header "Authorization: Bearer ...".
+    # The API always requires a token (?token=... or "Authorization: Bearer ..."); when empty,
+    # a random one is generated once and kept in <data_dir>/token.
     "auth_token": "",
     "data_dir": "~/.ai-orchestrator",
     "claude_bin": "claude",
+    # Skills, agents, commands, plugins, CLAUDE.md, settings.json and MCP servers from this
+    # config dir are linked into every account's config dir, so all accounts behave the same.
+    "shared_config_dir": "~/.claude",
     # Claude accounts. Each one is a separate CLAUDE_CONFIG_DIR that you logged into once.
     # config_dir = null means the default ~/.claude.
     "accounts": [
@@ -62,6 +67,9 @@ DEFAULTS = {
         "max_lessons_in_prompt": 8,
         # Use the local "reflect" model to extract lessons after each task.
         "llm_reflection": True,
+        # Lessons written by the local model wait for your approval before they reach prompts,
+        # so a bad or injected lesson cannot silently steer every later task.
+        "auto_approve_llm_lessons": False,
     },
     "notify": {
         # e.g. "https://ntfy.sh/my-secret-topic" -> push to your phone when tasks finish.
@@ -89,6 +97,13 @@ def load(path=None):
     data_dir = Path(os.path.expanduser(cfg["data_dir"]))
     data_dir.mkdir(parents=True, exist_ok=True)
     cfg["data_dir"] = str(data_dir)
+    if not cfg.get("auth_token"):
+        tok_file = data_dir / "token"
+        if not tok_file.exists():
+            tok_file.write_text(secrets.token_urlsafe(24))
+            tok_file.chmod(0o600)
+        cfg["auth_token"] = tok_file.read_text().strip()
+    cfg["shared_config_dir"] = os.path.expanduser(cfg.get("shared_config_dir") or "~/.claude")
     for acc in cfg["accounts"]:
         if acc.get("config_dir"):
             acc["config_dir"] = os.path.expanduser(acc["config_dir"])

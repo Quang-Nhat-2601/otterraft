@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 from . import config
+from .accounts import sync_shared
 from .bus import Bus
 from .db import DB
 
@@ -34,8 +35,9 @@ def cmd_serve(args, cfg):
     orch = Orchestrator(cfg, open_db(cfg), Bus())
     orch.start()
     httpd = serve(orch)
-    tok = f"?token={cfg['auth_token']}" if cfg.get("auth_token") else ""
-    print(f"Dashboard: http://{cfg['host']}:{cfg['port']}/{tok}")
+    for line in sync_shared(cfg):
+        print(line)
+    print(f"Dashboard: http://{cfg['host']}:{cfg['port']}/?token={cfg['auth_token']}")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
@@ -82,6 +84,8 @@ def cmd_login(args, cfg):
         env["CLAUDE_CONFIG_DIR"] = acc["config_dir"]
     print(f"Starting Claude Code for account '{acc['name']}'. Type /login, sign in, then /exit.")
     subprocess.call([cfg["claude_bin"]], env=env)
+    for line in sync_shared(cfg):
+        print(line)
 
 
 def cmd_doctor(args, cfg):
@@ -94,6 +98,8 @@ def cmd_doctor(args, cfg):
         li = _logged_in(a)
         print(f"[{'ok' if li else '??'}] account {a['name']}: {a.get('config_dir') or '~/.claude'}"
               + ("" if li else f"  -> run: python -m orchestrator login {a['name']}"))
+    for line in sync_shared(cfg, dry_run=True):
+        print(line)
     local = LocalLLM(cfg)
     if local.enabled:
         have = local.available_models()

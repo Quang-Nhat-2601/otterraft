@@ -173,8 +173,10 @@ class ClaudeRun:
         if self.proc.returncode and not res["error"]:
             res["error"] = "\n".join(stderr_lines[-10:]) or f"exit code {self.proc.returncode}"
         if not res["ok"]:
-            res["limit"], res["reset_at"] = detect_limit(
-                (res["error"] or "") + "\n" + "\n".join(stderr_lines[-10:]))
+            for text in (res["error"], "\n".join(stderr_lines[-5:])):
+                res["limit"], res["reset_at"] = detect_limit(text)
+                if res["limit"]:
+                    break
         return res
 
 

@@ -48,4 +48,5 @@ out({"type": "assistant", "message": {"content": [{"type": "text", "text": text}
 out({"type": "result", "subtype": "success", "is_error": False, "session_id": sid, "result": text,
      "total_cost_usd": 0.12, "usage": {"input_tokens": 1000, "cache_read_input_tokens": 500, "output_tokens": 200},
      "num_turns": 3, "duration_ms": 1234,
-     "permission_denials": [{"tool_name": "Bash", "tool_input": {"command": "rm -rf build"}}]})
+     "permission_denials": [{"tool_name": "Bash", "tool_input": {"command": "rm -rf build"}},
+                            {"tool_name": "Bash", "tool_input": {"command": "npm test -- --watch=false"}}]})
