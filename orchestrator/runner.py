@@ -8,7 +8,7 @@ from pathlib import Path
 
 from . import workspace
 from .accounts import AccountPool
-from .agents.claude import ClaudeRun, handoff_session
+from .agents.claude import ClaudeRun, handoff_session, quick_call
 from .agents.local import LocalLLM
 from .agents.report import REPORT_INSTRUCTIONS, parse_report, strip_report
 from .coach import COACH_SYSTEM, Coach
@@ -19,7 +19,10 @@ CONTINUE_MSG = ("You were interrupted (provider limit, account switch or connect
                 "Continue the task exactly where you left off, then finish with the report block.")
 RESTART_NOTE = ("\n\n(An earlier attempt at this task was interrupted and could not be resumed. "
                 "Check the working tree for partial progress before redoing anything.)")
-PARKED_SEC = 10 * 365 * 86400  # "until you log in again"
+QUICK_SYSTEM = ("You answer tasks from a software developer's task queue. Answer directly and "
+                "completely, in the language the task is written in. You have no tools and cannot "
+                "read files or run commands; if the task needs something you were not given, say "
+                "exactly what is missing instead of guessing.")
 
 
 class Orchestrator:
@@ -27,7 +30,7 @@ class Orchestrator:
         self.cfg, self.db, self.bus = cfg, db, bus
         self.local = LocalLLM(cfg)
         self.pool = AccountPool(cfg, db)
-        self.router = Router(cfg, db, self.local)
+        self.router = Router(cfg, db, self.local, self.pool)
         self.learner = Learner(cfg, db, self.local)
         self.coach = Coach(cfg, db)
         self.active = {}          # task_id -> ClaudeRun (for cancel)
@@ -188,11 +191,13 @@ class Orchestrator:
         with self.lock:
             if key in self.busy.values():
                 return
-        account = None
+        account, slot = None, False
         if task["agent"] == "claude":
-            account = self.pool.acquire()
-            if not account:
-                return  # all accounts busy, cooling down or parked; stay queued
+            account, slot = self.pool.acquire(), True
+        elif task["agent"] == "quick":
+            account = self.pool.best_available()
+        if task["agent"] in ("claude", "quick") and not account:
+            return  # all accounts busy, cooling down or parked; stay queued
         with self.lock:
             self.busy[task["id"]] = key
         self.db.update_task(task["id"], status="running", started_at=task.get("started_at") or time.time(),
@@ -200,13 +205,15 @@ class Orchestrator:
                             not_before=None)
         self.stall_flagged.discard(task["id"])
         self.changed(task["id"])
-        threading.Thread(target=self._guard, args=(task, account), daemon=True).start()
+        threading.Thread(target=self._guard, args=(task, account, slot), daemon=True).start()
 
-    def _guard(self, task, account):
+    def _guard(self, task, account, slot):
         try:
             if task["agent"] == "claude":
                 task = self._prepare_workspace(task)
                 self._run_claude(task, account)
+            elif task["agent"] == "quick":
+                self._run_quick(task, account)
             else:
                 self._run_local(task)
         except Exception as e:
@@ -215,7 +222,7 @@ class Orchestrator:
                                 finished_at=time.time())
             self.emit(task["id"], "error", {"text": str(e)})
         finally:
-            if account:
+            if slot:
                 self.pool.release(account["name"])
             with self.lock:
                 self.busy.pop(task["id"], None)
@@ -286,7 +293,8 @@ class Orchestrator:
         # A resumed session keeps its original system prompt, so only a fresh run builds one.
         system = None if resume else self._system_prompt(task)
         run = ClaudeRun(self.cfg, account, prompt, task.get("exec_dir") or task.get("workdir"),
-                        system, on_event, resume_session=resume, extra_args=extra)
+                        system, on_event, resume_session=resume, extra_args=extra,
+                        model=self._agent_model(task))
         self.active[tid] = run
         res = run.run()
         if run.cancelled:
@@ -312,7 +320,50 @@ class Orchestrator:
             return
         self._finish(self.db.task(tid), res["ok"], res["text"], res["error"])
 
-    def _recover(self, task, account, res, message):
+    def _agent_model(self, task):
+        """Light tasks run on the lighter model; the rest on the configured (or account) default."""
+        c = self.cfg["claude"]
+        if task.get("kind") == "task" and c.get("light_model") and \
+                (task.get("complexity") or 5) <= c.get("light_max_complexity", 3):
+            return c["light_model"]
+        return c.get("model") or None
+
+    def _run_quick(self, task, account):
+        tid = task["id"]
+        q = self.cfg["quick"]
+        message = task.get("pending_message")
+        prompt = task["prompt"]
+        if message:
+            prompt += f"\n\nYour previous answer:\n{task.get('result_text') or ''}\n\n" \
+                      f"Follow-up from the user:\n{message}"
+        self.db.update_task(tid, account=account["name"], model=q.get("model"), pending_message=None)
+        self.emit(tid, "start", {"agent": "quick", "account": account["name"], "model": q.get("model")})
+        lessons = self.learner.relevant_lessons(task["prompt"], task.get("workdir"))
+        system = "\n\n".join(x for x in (QUICK_SYSTEM, self.learner.lessons_block(lessons)) if x)
+        res = quick_call(self.cfg, account, system, prompt, q.get("model"), timeout=q.get("timeout_sec", 300))
+        cur = self.db.task(tid)
+        self.db.update_task(
+            tid, model=res["model"], cost_usd=(cur["cost_usd"] or 0) + res["cost_usd"],
+            input_tokens=(cur["input_tokens"] or 0) + res["input_tokens"],
+            output_tokens=(cur["output_tokens"] or 0) + res["output_tokens"],
+            cached_tokens=(cur["cached_tokens"] or 0) + res["cached_tokens"],
+            duration_ms=(cur["duration_ms"] or 0) + res["duration_ms"])
+        self.db.add_usage(task_id=tid, kind="quick", name=account["name"], model=res["model"],
+                          cost_usd=res["cost_usd"], input_tokens=res["input_tokens"],
+                          output_tokens=res["output_tokens"], cached_tokens=res["cached_tokens"],
+                          duration_ms=res["duration_ms"], ok=None if res["ok"] else 0,  # review decides
+                          category=task.get("category"))
+        self.emit(tid, "text", {"text": res["text"][:4000]} if res["ok"] else {"text": f"error: {res['error']}"})
+        if res["ok"]:
+            return self._finish(self.db.task(tid), True, res["text"], None)
+        if self._recover(self.db.task(tid), account, res, message, resumable=False):
+            return
+        # Anything else (e.g. the answer needs files after all): hand it to a full agent.
+        self.db.update_task(tid, status="queued", agent="claude", agent_pref="claude", pending_message=message,
+                            route_reason=f"escalated from quick answer: {(res['error'] or '')[:200]}")
+        self.emit(tid, "escalated", {"to": "claude", "reason": res["error"]})
+
+    def _recover(self, task, account, res, message, resumable=True):
         """Handle a failure that is not the task's fault. Returns True when the task was requeued."""
         tid, name, kind = task["id"], account["name"], res["failure"]
         if kind == "quota":
@@ -320,8 +371,7 @@ class Orchestrator:
             self.emit(tid, "account_limit", {"account": name, "until": until})
             self.notify("Account limit", f"{name} is out of usage until {time.ctime(until)}; switching account")
         elif kind == "login":
-            self.pool.cool_down(name, time.time() + PARKED_SEC,
-                                f"login required: run `python -m orchestrator login {name}`")
+            self.pool.park_login(name)
             self.emit(tid, "account_login_required", {"account": name})
             self.notify("Account logged out", f"{name} needs `python -m orchestrator login {name}`")
         elif kind == "transient":
@@ -342,7 +392,7 @@ class Orchestrator:
         else:
             return False
         # Resume where it stopped if the run got anywhere; otherwise resend what it was given.
-        progressed = res["num_turns"] > 0 and res["session_id"]
+        progressed = resumable and res["num_turns"] > 0 and res["session_id"]
         self.db.update_task(tid, status="queued", pending_message=CONTINUE_MSG if progressed else message)
         return True
 
@@ -374,9 +424,10 @@ class Orchestrator:
                           duration_ms=out["duration_ms"], ok=None if ok else 0,  # review decides
                           category=task.get("category"))
         if not ok and self.cfg["local"]["escalate_to_claude"] and self.pool.accounts:
-            self.db.update_task(tid, status="queued", agent="claude", agent_pref="claude",
+            to = "quick" if self.cfg["quick"].get("enabled") else "claude"
+            self.db.update_task(tid, status="queued", agent=to, agent_pref=to,
                                 route_reason=f"escalated from local: {err}")
-            self.emit(tid, "escalated", {"to": "claude", "reason": err})
+            self.emit(tid, "escalated", {"to": to, "reason": err})
             return
         self._finish(self.db.task(tid), ok, text, err)
 

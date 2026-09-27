@@ -64,6 +64,17 @@ class AccountPool:
         if info.get("status") and info["status"] not in ("allowed", "allowed_warning"):
             self.cool_down(name, info.get("resetsAt"), f"rate limit status: {info['status']}")
 
+    def best_available(self):
+        """The account to use for a short call (routing, quick answers). Takes no parallel slot:
+        these calls last seconds and must not wait behind a long agent run."""
+        accounts = self.available()
+        return accounts[0] if accounts else None
+
+    def park_login(self, name):
+        """Take a logged-out account out of rotation until `orchestrator login <name>`."""
+        return self.cool_down(name, time.time() + 10 * 365 * 86400,
+                              f"login required: run `python -m orchestrator login {name}`")
+
     def acquire(self, exclude=()):
         """Reserve a slot on the best account. Returns the account dict or None."""
         with self.lock:

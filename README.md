@@ -4,7 +4,10 @@ Một "bộ não điều phối" chạy trên máy của bạn:
 
 - **Tự đổi tài khoản Claude**: dùng nhiều tài khoản Claude Code. Khi một tài khoản gần đầy cửa sổ 5 giờ (mặc định 90%) hoặc chạm giới hạn, nó chuyển sang tài khoản khác. Session đang chạy dở được **mang sang tài khoản mới và chạy tiếp**, không phải làm lại từ đầu.
 - **Auto mode thật sự**: Claude chạy headless với `--permission-mode auto`, không dừng lại xin quyền. Tool nào bị chặn sẽ được gom thành "đề xuất quyền"; bạn bấm duyệt một lần, những lần sau không bị chặn nữa.
-- **Giao việc cho AI local**: task đơn giản (tóm tắt, dịch, giải thích, viết commit message, regex, snippet…) được chuyển cho model local (Ollama / LM Studio / llama.cpp). Nếu model local làm hỏng, task tự động chuyển lên Claude.
+- **Claude điều phối (Sonnet)**: mỗi task được Sonnet phân loại bằng một lần gọi tinh gọn (~2.500 token, ~2–3 giây), rồi giao cho đúng người làm:
+  - **Claude agent** cho việc cần sửa code hoặc chạy lệnh. Task có độ khó ≤3 chạy bằng Sonnet để tiết kiệm quota của model mạnh hơn.
+  - **Claude trả lời nhanh** cho việc chỉ cần văn bản (tóm tắt, dịch, commit message…): khoảng 2.500 token, thay vì 40.000+ token của một phiên agent.
+  - **AI local** (tuỳ chọn, tắt mặc định) nếu bạn muốn giữ việc đơn giản trên máy.
 - **Dashboard trực tiếp**: xem AI đang làm gì theo thời gian thực (tool nào, lệnh gì), tiến độ theo todo list, usage và tỉ lệ thành công của từng tài khoản và từng model.
 - **Báo cáo sau mỗi task**: AI hiểu input là gì, output ra sao, file nào thay đổi, kết quả verify tự động, và **danh sách test case bạn cần kiểm tra** (có checkbox).
 - **Mỗi task một nhánh git riêng**: task chạy trong git worktree trên nhánh `orch/task-<id>`. Nhiều task chạy song song trên cùng repo, và checkout của bạn không bị đụng tới cho tới khi bạn bấm **Merge**.
@@ -40,14 +43,19 @@ Vì vậy tôi build cái này. Bạn vẫn có thể dùng chung với ccusage 
 ┌────────────────────────────┴──────────────▼─────────────────────────┐
 │ Orchestrator (python -m orchestrator serve)                         │
 │                                                                     │
-│  Router (brain) ── classify: local LLM / heuristic + learned stats  │
+│  Brain: Sonnet, one lean call (no tools/skills/MCP, ~2.5K tokens)   │
+│     fallback: local model → keyword rules; + learned success stats  │
 │     │                                                               │
-│     ├── Claude runner ── Account pool ── acc1 (CLAUDE_CONFIG_DIR=…) │
+│     ├── Claude agent ── Account pool ── acc1 (CLAUDE_CONFIG_DIR=…)  │
 │     │   claude -p --output-format stream-json --permission-mode auto│
+│     │   git worktree per task · sonnet if complexity ≤3             │
 │     │   limit/utilization ≥ 90%? → cooldown → handoff → --resume    │
 │     │                                                               │
-│     └── Local runner ── Ollama / OpenAI-compatible server           │
-│            fail → escalate to Claude                                │
+│     ├── Claude quick ── one lean call, text-only answers            │
+│     │      needs files after all → escalate to the agent            │
+│     │                                                               │
+│     └── Local (optional) ── Ollama / OpenAI-compatible server       │
+│            fail → escalate to Claude quick                          │
 │                                                                     │
 │  After each task: parse report → git status → verify_cmd →          │
 │                   reflect (lessons) → notify                        │
@@ -84,6 +92,8 @@ python3 -m orchestrator login work
 
 ### 3. (Tuỳ chọn) Cài AI local
 
+**Mặc định không cần.** Claude Sonnet điều phối và trả lời các task văn bản với rất ít quota: một lần phân loại khoảng 2.500 token, bằng dưới 1% một task code. Trên máy chỉ có CPU, Sonnet cũng nhanh hơn model local (2–3 giây so với 5–30 giây) và không chiếm 13GB RAM. Chỉ bật AI local (`"local": {"enabled": true}`) nếu bạn muốn dữ liệu không rời máy, cần làm việc offline, hoặc có rất nhiều việc văn bản lặp lại.
+
 AI local chỉ làm việc **đơn giản, chỉ ra văn bản**: tóm tắt, dịch, giải thích, commit message, regex, phân loại task. Việc cần đọc/sửa code vẫn giao cho Claude.
 
 **Máy chỉ có CPU:** tốc độ phụ thuộc gần như hoàn toàn vào **băng thông RAM**, vì mỗi token model phải đọc lại toàn bộ trọng số *đang hoạt động*. Vì vậy trên CPU, model **MoE** (tổng tham số lớn nhưng mỗi token chỉ dùng ~3–4 tỷ) nhanh hơn nhiều so với model dense cùng dung lượng.
@@ -117,7 +127,7 @@ Nên **dùng một model cho mọi vai trò**: hai model cùng nằm trong RAM s
 }
 ```
 
-Không có model local cũng được: mọi task sẽ đi Claude, còn router dùng luật từ khoá.
+Khi bật AI local, nó được ưu tiên cho task văn bản đơn giản. Nếu nó làm hỏng, task chuyển sang Claude trả lời nhanh. Nếu mọi tài khoản Claude đều hết quota, bộ não dùng model local để phân loại, rồi đến luật từ khoá.
 
 ### Skills, CLAUDE.md, hooks, MCP của bạn
 
@@ -185,7 +195,12 @@ Chỉ những thông báo lỗi ngắn do CLI in ra mới được phân loại,
 | `claude.handoff_on_limit` | `true` | Mang session sang tài khoản mới và `--resume` |
 | `claude.allowed_tools` | `[]` | Allowlist; tự cập nhật khi bạn duyệt đề xuất quyền |
 | `claude.max_turns` / `max_budget_usd` | 80 / 0 | Giới hạn an toàn cho mỗi lần chạy |
-| `router.local_categories` | summarize, translate… | Các loại việc được phép giao cho local |
+| `brain.provider` / `brain.model` | `claude` / `sonnet` | Ai phân loại task: `claude` (một lần gọi tinh gọn), `local`, hoặc `keywords` |
+| `quick.enabled` / `quick.model` / `quick.max_complexity` | true / `sonnet` / 3 | Task chỉ cần văn bản được trả lời bằng một lần gọi Claude, không mở phiên agent |
+| `claude.model` | "" | Model cho task khó (để trống = model mặc định của tài khoản) |
+| `claude.light_model` / `light_max_complexity` | `sonnet` / 3 | Task có độ khó ≤3 chạy bằng Sonnet |
+| `local.enabled` | false | Bật AI local cho task văn bản đơn giản |
+| `router.local_categories` | summarize, translate… | Các loại việc được coi là "chỉ cần văn bản" (giao cho quick hoặc local) |
 | `router.local_max_complexity` | 2 | Độ khó tối đa (1–5) được giao cho local |
 | `router.min_local_success` | 0.6 | Nếu tỉ lệ thành công của local thấp hơn mức này, loại việc đó chuyển sang Claude |
 | `notify.ntfy_url` | "" | vd `https://ntfy.sh/ten-bi-mat-cua-ban`; cài app ntfy trên điện thoại để nhận thông báo |

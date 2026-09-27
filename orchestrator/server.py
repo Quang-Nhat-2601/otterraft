@@ -20,7 +20,10 @@ def stats(orch):
         agg = lambda since: db.one(
             "SELECT COUNT(*) n, COALESCE(SUM(cost_usd),0) cost, COALESCE(SUM(input_tokens),0) inp, "
             "COALESCE(SUM(output_tokens),0) outp, COALESCE(AVG(ok),0) ok, COALESCE(AVG(duration_ms),0) dur "
-            "FROM usage WHERE kind='claude' AND name=? AND ts>?", (a["name"], since))
+            "FROM usage WHERE kind IN ('claude','quick','brain') AND name=? AND ts>?", (a["name"], since))
+        brain = db.one("SELECT COUNT(*) n, COALESCE(SUM(input_tokens+output_tokens+cached_tokens),0) tokens, "
+                       "COALESCE(SUM(cost_usd),0) cost, COALESCE(AVG(duration_ms),0) dur "
+                       "FROM usage WHERE kind='brain' AND name=? AND ts>?", (a["name"], now - 7 * 86400))
         accounts.append({
             "name": a["name"], "enabled": a.get("enabled", True), "priority": a.get("priority", 9),
             "config_dir": a.get("config_dir") or "~/.claude",
@@ -29,7 +32,8 @@ def stats(orch):
             "last_error": st.get("last_error"),
             "limits": st.get("limits"), "limits_at": st.get("limits_at"),
             "utilization_5h": orch.pool.utilization(a["name"]),
-            "window_5h": agg(now - 5 * 3600), "week": agg(now - 7 * 86400), "all": agg(0)})
+            "window_5h": agg(now - 5 * 3600), "week": agg(now - 7 * 86400), "all": agg(0),
+            "brain_week": brain})
     locals_ = db.query(
         "SELECT name, COUNT(*) n, COALESCE(SUM(input_tokens),0) inp, COALESCE(SUM(output_tokens),0) outp, "
         "COALESCE(AVG(ok),0) ok, COALESCE(AVG(duration_ms),0) dur FROM usage WHERE kind='local' GROUP BY name")
@@ -42,14 +46,17 @@ def stats(orch):
     by_cat = db.query(
         "SELECT category, kind, COUNT(*) n, AVG(ok) ok FROM usage GROUP BY category, kind ORDER BY n DESC")
     daily = db.query(
-        "SELECT date(ts,'unixepoch','localtime') day, kind, COUNT(*) n, COALESCE(SUM(cost_usd),0) cost, "
-        "COALESCE(SUM(input_tokens+output_tokens),0) tokens FROM usage WHERE ts>? GROUP BY day, kind ORDER BY day",
+        "SELECT date(ts,'unixepoch','localtime') day, CASE kind WHEN 'local' THEN 'local' ELSE 'claude' END kind, "
+        "COUNT(*) n, COALESCE(SUM(cost_usd),0) cost, COALESCE(SUM(input_tokens+output_tokens),0) tokens "
+        "FROM usage WHERE ts>? GROUP BY 1, 2 ORDER BY 1",
         (now - 14 * 86400,))
     counts = {r["status"]: r["n"] for r in db.query("SELECT status, COUNT(*) n FROM tasks GROUP BY status")}
     saved = db.one("SELECT COUNT(*) n, COALESCE(SUM(input_tokens+output_tokens),0) tokens FROM usage "
                    "WHERE kind='local' AND ok=1")
     return {"accounts": accounts, "local": locals_, "local_server_up": bool(installed),
+            "local_enabled": orch.local.enabled,
             "by_category": by_cat, "daily": daily, "counts": counts, "local_saved": saved,
+            "brain": orch.cfg["brain"], "quick": orch.cfg["quick"],
             "config": {"permission_mode": orch.cfg["claude"]["permission_mode"],
                        "auto_accept": orch.cfg.get("auto_accept")}}
 

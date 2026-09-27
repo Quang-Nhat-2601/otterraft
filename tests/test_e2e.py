@@ -87,7 +87,7 @@ class E2E(unittest.TestCase):
                 {"name": "acc1", "config_dir": cls.tmp + "/limited-acc1", "priority": 1},
                 {"name": "acc2", "config_dir": cls.tmp + "/acc2", "priority": 2},
             ],
-            "local": {"ollama_url": f"http://127.0.0.1:{cls.ollama.server_port}",
+            "local": {"enabled": True, "ollama_url": f"http://127.0.0.1:{cls.ollama.server_port}",
                       "models": [{"name": "tiny", "roles": ["simple", "router", "reflect"]}]},
         }))
         cls.cfg = config.load(cfg_path)
@@ -173,8 +173,9 @@ class E2E(unittest.TestCase):
         tid = self.api("/api/tasks", {"prompt": "Tóm tắt FAILME"})["id"]
         t = wait_for(lambda: (lambda t: t if t["status"] in ("review", "failed") else None)(
             self.api(f"/api/tasks/{tid}")))
-        self.assertEqual(t["agent"], "claude")
+        self.assertEqual(t["agent"], "quick")  # a text task goes to a quick Claude answer, not a full agent
         self.assertIn("escalated", t["route_reason"])
+        self.assertEqual(t["status"], "review")
 
     def test_worktree_branch_merge_and_cleanup(self):
         repo = Path(tempfile.mkdtemp()) / "app"
@@ -263,6 +264,61 @@ class E2E(unittest.TestCase):
 
 
 class Units(unittest.TestCase):
+    def _orch(self, **cfg):
+        tmp = tempfile.mkdtemp()
+        cfg_path = Path(tmp) / "o.json"
+        cfg_path.write_text(json.dumps({"data_dir": tmp + "/data", "claude_bin": FAKE_CLAUDE,
+                                        "accounts": [{"name": "a", "config_dir": tmp + "/a"}], **cfg}))
+        orch = Orchestrator(config.load(cfg_path), DB(Path(tmp) / "o.db"), Bus())
+        orch.start()
+        self.addCleanup(orch.stop.set)
+        return orch
+
+    def _done(self, orch, tid):
+        return wait_for(lambda: (lambda t: t if t["status"] in ("review", "failed") else None)(orch.db.task(tid)))
+
+    def test_sonnet_brain_routes_and_answers_text_tasks_quickly(self):
+        log = Path(tempfile.mkdtemp()) / "calls.jsonl"
+        os.environ["FAKE_CLAUDE_LOG"] = str(log)
+        self.addCleanup(os.environ.pop, "FAKE_CLAUDE_LOG", None)
+        orch = self._orch()  # defaults: brain = Claude sonnet, quick answers on, local off
+        tid = orch.submit("Tóm tắt thay đổi trong bản release này")
+        t = self._done(orch, tid)
+        self.assertEqual((t["agent"], t["status"], t["category"]), ("quick", "review", "summarize"))
+        self.assertIn("claude claude-sonnet-test", t["route_reason"])  # decided by the brain
+        self.assertIn("Quick answer", t["result_text"])
+        self.assertEqual(t["model"], "claude-sonnet-test")  # the worker model, not the background helper
+        calls = [json.loads(l)["args"] for l in log.read_text().splitlines()]
+        self.assertEqual(len(calls), 2)  # one brain call + one quick answer, no agent session
+        for args in calls:
+            self.assertEqual(args[args.index("--model") + 1], "sonnet")
+            self.assertEqual(args[args.index("--tools") + 1], "")  # lean: no tools loaded
+        kinds = [r["kind"] for r in orch.db.query("SELECT kind FROM usage WHERE task_id=? ORDER BY id", (tid,))]
+        self.assertEqual(kinds, ["brain", "quick"])
+
+    def test_agent_model_follows_complexity(self):
+        log = Path(tempfile.mkdtemp()) / "calls.jsonl"
+        os.environ["FAKE_CLAUDE_LOG"] = str(log)
+        self.addCleanup(os.environ.pop, "FAKE_CLAUDE_LOG", None)
+        orch = self._orch(claude={"model": "opus"})
+        light = self._done(orch, orch.submit("Fix the login bug in app.py"))
+        heavy = self._done(orch, orch.submit("BIG REFACTOR of the whole app into services"))
+        self.assertEqual((light["complexity"], heavy["complexity"]), (2, 5))
+        agent_models = [c["args"][c["args"].index("--model") + 1] for c in map(json.loads, log.read_text().splitlines())
+                        if "stream-json" in c["args"]]
+        self.assertEqual(agent_models, ["sonnet", "opus"])
+
+    def test_quick_answer_escalates_to_agent_when_it_needs_files(self):
+        orch = self._orch()
+        tid = orch.submit("Tóm tắt QUICKFAIL")
+        t = wait_for(lambda: (lambda t: t if t["agent"] == "claude" and t["status"] == "review" else None)(orch.db.task(tid)))
+        self.assertIn("escalated from quick", t["route_reason"])
+
+    def test_brain_falls_back_to_keywords_without_accounts(self):
+        orch = self._orch(accounts=[])
+        out = orch.router.classify("Dịch đoạn này sang tiếng Anh")
+        self.assertEqual((out["category"], out["source"]), ("translate", "keywords"))
+
     def test_classify_failures(self):
         import datetime as dt
         self.assertEqual(classify("Claude AI usage limit reached|1737000000"), ("quota", 1737000000))

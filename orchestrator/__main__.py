@@ -210,7 +210,7 @@ def main():
     a.add_argument("prompt")
     a.add_argument("-w", "--workdir")
     a.add_argument("-t", "--title")
-    a.add_argument("-a", "--agent", choices=["auto", "claude", "local"], default="auto")
+    a.add_argument("-a", "--agent", choices=["auto", "claude", "quick", "local"], default="auto")
     a.add_argument("-v", "--verify", help="shell command that must pass, e.g. 'pytest -q'")
     sub.add_parser("accounts", help="show accounts and cooldowns")
     l = sub.add_parser("login", help="log an account in (opens Claude Code with its config dir)")

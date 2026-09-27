@@ -6,6 +6,9 @@ CLAUDE_CONFIG_DIR name and the prompt:
 - prompt containing 'OVERLOAD'      -> first run fails with 529 overloaded, later runs succeed
 - --resume of an unknown session    -> 'No conversation found'
 - --tools Read,Grep,Glob            -> behaves as the Reflection Coach
+- --output-format json              -> a lean one-shot call: the brain classifying a task
+                                       (system prompt mentions the dispatcher), or a quick
+                                       text answer; 'QUICKFAIL' in the prompt makes it fail
 Every invocation's arguments are appended to $FAKE_CLAUDE_LOG when set."""
 import json
 import os
@@ -32,6 +35,25 @@ def fail(text, turns=0):
 
 if "loggedout" in str(cfg_dir):
     fail("Invalid API key · Please run /login")
+
+if args[args.index("--output-format") + 1] == "json":
+    system = args[args.index("--system-prompt") + 1] if "--system-prompt" in args else ""
+    low = prompt.lower()
+    if "dispatcher" in system:
+        text_task = any(w in low for w in ("tóm tắt", "dịch", "commit message", "summarize"))
+        answer = json.dumps({"category": "summarize" if text_task else "bugfix",
+                             "complexity": 5 if "big refactor" in low else 1 if text_task else 2,
+                             "needs_repo": not text_task})
+    elif "QUICKFAIL" in prompt:
+        fail("I need to read the repository to answer this.")
+    else:
+        answer = f"Quick answer to: {prompt[:60]}"
+    out({"type": "result", "subtype": "success", "is_error": False, "session_id": sid, "result": answer,
+         "total_cost_usd": 0.002, "num_turns": 1, "duration_ms": 900,
+         "usage": {"input_tokens": 2, "output_tokens": 30, "cache_read_input_tokens": 1100},
+         "modelUsage": {"claude-sonnet-test": {"inputTokens": 2, "outputTokens": 30, "cacheReadInputTokens": 1100},
+                        "claude-haiku-test": {"inputTokens": 300, "outputTokens": 5}}})
+    sys.exit(0)
 
 proj = cfg_dir / "projects" / os.getcwd().replace("/", "-")
 if resume and not (proj / f"{sid}.jsonl").exists():

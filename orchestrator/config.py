@@ -21,11 +21,22 @@ DEFAULTS = {
     "accounts": [
         {"name": "main", "config_dir": None, "priority": 1, "max_parallel": 1, "enabled": True},
     ],
+    # The "brain" classifies every task and picks who does it. "claude" = one lean Claude call
+    # (~1K tokens, ~2s; no tools, skills or MCP loaded) on whichever account is free, falling
+    # back to a local model and then to keyword rules. "local" or "keywords" skip Claude.
+    "brain": {"provider": "claude", "model": "sonnet", "timeout_sec": 60},
+    # Text-only tasks (summaries, translations, commit messages, explanations) are answered by
+    # one lean Claude call instead of a full agent session.
+    "quick": {"enabled": True, "model": "sonnet", "max_complexity": 3},
     "claude": {
         # "auto" = the classifier-based auto mode, never stops to ask. Other options:
         # "acceptEdits", "bypassPermissions" (only in a sandbox!), "dontAsk".
         "permission_mode": "auto",
+        # Model for agent tasks. "" = the account's default. Tasks the brain rates at most
+        # light_max_complexity use light_model instead, saving the stronger model's quota.
         "model": "",
+        "light_model": "sonnet",
+        "light_max_complexity": 3,
         "max_turns": 80,
         "max_budget_usd": 0,
         "allowed_tools": [],
@@ -45,7 +56,9 @@ DEFAULTS = {
         "switch_at_utilization": 0.9,
     },
     "local": {
-        "enabled": True,
+        # Off by default: Claude does the routing and quick answers. Turn on to keep simple
+        # text tasks on your machine (privacy, offline, or saving quota on bulk work).
+        "enabled": False,
         "ollama_url": "http://127.0.0.1:11434",
         # One model for every role keeps a single model in RAM. "think" is passed to Ollama for
         # reasoning models ("low" keeps gpt-oss fast on CPU; false turns thinking off).

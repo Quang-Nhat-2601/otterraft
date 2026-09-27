@@ -16,14 +16,24 @@
       "max_parallel": 1
     }
   ],
+  "brain": {
+    "provider": "claude",
+    "model": "sonnet"
+  },
+  "quick": {
+    "enabled": true,
+    "model": "sonnet"
+  },
   "claude": {
     "permission_mode": "auto",
     "model": "",
+    "light_model": "sonnet",
+    "light_max_complexity": 3,
     "max_turns": 80,
     "allowed_tools": []
   },
   "local": {
-    "enabled": true,
+    "enabled": false,
     "ollama_url": "http://127.0.0.1:11434",
     "models": [
       {

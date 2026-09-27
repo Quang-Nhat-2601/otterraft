@@ -18,12 +18,12 @@ CATEGORY_RULES = [
 ]
 REPO_HINTS = r"repo|codebase|file|folder|thư mục|project|dự án|module|\.py\b|\.ts\b|\.js\b|src/"
 
-CLASSIFIER_SYSTEM = """Classify a software task. Reply with JSON only:
+CLASSIFIER_SYSTEM = """You are the dispatcher of an AI task orchestrator. Classify the task you are given.
+Reply with one JSON object and nothing else:
 {"category": one of [summarize, translate, explain, commit_message, docs, classify, regex, snippet,
 chat, bugfix, refactor, test, feature, devops, research, other],
- "complexity": 1-5 (1 = one-shot text answer, 5 = large multi-file engineering),
- "needs_repo": true if it must read or modify files / run commands}"""
-
+ "complexity": 1-5 (1 = one-shot text answer, 3 = a focused change in a few files, 5 = large multi-file engineering),
+ "needs_repo": true if doing it requires reading or changing files or running commands, false if a text answer is enough}"""
 
 def heuristic_classify(prompt):
     p = prompt.lower()
@@ -42,23 +42,64 @@ def heuristic_classify(prompt):
 
 
 class Router:
-    def __init__(self, cfg, db, local):
+    """Picks who does a task:
+    - claude: a full Claude Code agent (tools, repo, worktree)
+    - quick:  one lean Claude call, no tools; for text answers (summaries, translations, messages)
+    - local:  a local model, when you enabled one
+    The classification itself comes from the "brain": a lean Claude call (Sonnet by default),
+    falling back to a local model, then to keyword rules."""
+
+    def __init__(self, cfg, db, local, pool=None):
         self.cfg = cfg
         self.db = db
         self.local = local
+        self.pool = pool
 
-    def classify(self, prompt):
-        if self.cfg["router"].get("use_llm_classifier") and self.local.enabled:
+    def classify(self, prompt, task_id=None):
+        provider = self.cfg["brain"].get("provider", "claude")
+        if provider == "claude" and self.pool:
+            out = self._claude_classify(prompt, task_id)
+            if out:
+                return out
+        if provider in ("claude", "local") and self.local.enabled and self.local.model_for("router") \
+                and self.cfg["router"].get("use_llm_classifier", True):
             out = self.local.chat_json("router", CLASSIFIER_SYSTEM, prompt[:4000])
             if isinstance(out, dict) and out.get("category"):
-                try:
-                    out["complexity"] = int(out.get("complexity", 3))
-                except (TypeError, ValueError):
-                    out["complexity"] = 3
-                out["source"] = "llm"
-                return out
+                return self._clean(out, "local")
         out = heuristic_classify(prompt)
-        out["source"] = "heuristic"
+        out["source"] = "keywords"
+        return out
+
+    def _claude_classify(self, prompt, task_id):
+        from .agents.claude import parse_json_answer, quick_call
+        account = self.pool.best_available()
+        if not account:
+            return None
+        b = self.cfg["brain"]
+        res = quick_call(self.cfg, account, CLASSIFIER_SYSTEM, prompt[:12000], b.get("model", "sonnet"),
+                         timeout=b.get("timeout_sec", 60))
+        self.db.add_usage(task_id=task_id, kind="brain", name=account["name"], model=res["model"],
+                          cost_usd=res["cost_usd"], input_tokens=res["input_tokens"],
+                          output_tokens=res["output_tokens"], cached_tokens=res["cached_tokens"],
+                          duration_ms=res["duration_ms"], ok=1 if res["ok"] else 0, category="routing")
+        if not res["ok"]:
+            if res["failure"] == "quota":
+                self.pool.cool_down(account["name"], res["reset_at"] or self.pool.window_reset(account["name"]),
+                                    res["error"] or "")
+            elif res["failure"] == "login":
+                self.pool.park_login(account["name"])
+            return None
+        out = parse_json_answer(res["text"])
+        return self._clean(out, f"claude {res['model']}") if isinstance(out, dict) and out.get("category") else None
+
+    @staticmethod
+    def _clean(out, source):
+        try:
+            out["complexity"] = min(5, max(1, int(out.get("complexity", 3))))
+        except (TypeError, ValueError):
+            out["complexity"] = 3
+        out["needs_repo"] = bool(out.get("needs_repo"))
+        out["source"] = source
         return out
 
     def success_rate(self, kind, category):
@@ -66,23 +107,36 @@ class Router:
                           (kind, category))
         return (row["n"] or 0), (row["rate"] if row["rate"] is not None else None)
 
+    def _proven_bad(self, kind, cat):
+        r = self.cfg["router"]
+        n, rate = self.success_rate(kind, cat)
+        if n >= r["min_samples"] and rate is not None and rate < r["min_local_success"]:
+            return f"{kind} success on {cat} is {rate:.0%} over {n} tasks (learned)"
+        return None
+
     def route(self, task):
         """Returns (agent_kind, category, complexity, reason)."""
         pref = task.get("agent_pref") or "auto"
-        cls = self.classify(task["prompt"])
-        cat, cx = cls.get("category", "other"), cls.get("complexity", 3)
-        if pref in ("claude", "local"):
+        cls = self.classify(task["prompt"], task.get("id"))
+        cat, cx, src = cls.get("category", "other"), cls.get("complexity", 3), cls["source"]
+        if pref in ("claude", "local", "quick"):
             return pref, cat, cx, f"user chose {pref}"
         r = self.cfg["router"]
-        if not self.local.enabled or not self.local.model_for("simple"):
-            return "claude", cat, cx, "no local model configured"
         if cls.get("needs_repo"):
-            return "claude", cat, cx, f"{cat}: needs to work inside the repo"
+            return "claude", cat, cx, f"{cat}: needs to work inside the repo ({src})"
         if cat not in r["local_categories"]:
-            return "claude", cat, cx, f"{cat} is not a local category"
-        if cx > r["local_max_complexity"]:
-            return "claude", cat, cx, f"complexity {cx} > local max {r['local_max_complexity']}"
-        n, rate = self.success_rate("local", cat)
-        if n >= r["min_samples"] and rate is not None and rate < r["min_local_success"]:
-            return "claude", cat, cx, f"local success on {cat} is {rate:.0%} over {n} tasks (learned)"
-        return "local", cat, cx, f"simple {cat} (complexity {cx}) -> local ({cls['source']} classifier)"
+            return "claude", cat, cx, f"{cat} is not a text-only category ({src})"
+        why_not = []
+        if self.local.enabled and self.local.model_for("simple"):
+            bad = self._proven_bad("local", cat)
+            if cx <= r["local_max_complexity"] and not bad:
+                return "local", cat, cx, f"text task {cat} (complexity {cx}) -> local model ({src})"
+            why_not.append(bad or f"complexity {cx} > local max {r['local_max_complexity']}")
+        q = self.cfg["quick"]
+        if q.get("enabled"):
+            bad = self._proven_bad("quick", cat)
+            if cx <= q.get("max_complexity", 3) and not bad:
+                return "quick", cat, cx, f"text task {cat} (complexity {cx}) -> quick Claude answer ({src})" + \
+                    (f"; not local: {why_not[0]}" if why_not else "")
+            why_not.append(bad or f"complexity {cx} > quick max {q.get('max_complexity', 3)}")
+        return "claude", cat, cx, f"{cat} -> Claude agent ({src})" + (f"; {'; '.join(why_not)}" if why_not else "")

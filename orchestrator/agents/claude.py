@@ -225,3 +225,67 @@ def _text_of(content):
     if isinstance(content, list):
         return "\n".join(c.get("text", "") for c in content if isinstance(c, dict))
     return str(content)
+
+
+def quick_call(cfg, account, system, prompt, model, timeout=120):
+    """One lean Claude call on a subscription account: no tools, skills, MCP or CLAUDE.md, and
+    our own short system prompt instead of Claude Code's. About 1K tokens of context instead of
+    ~40K for a default `claude -p`, so routing and short text answers cost almost no quota.
+    Returns the same result shape as ClaudeRun.run()."""
+    res = {"ok": False, "text": "", "error": None, "failure": None, "reset_at": None, "limit": False,
+           "cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "cached_tokens": 0,
+           "duration_ms": 0, "num_turns": 0, "session_id": None, "model": model,
+           "permission_denials": []}
+    # A neutral cwd, so no project CLAUDE.md or settings get pulled in.
+    cwd = Path(cfg["data_dir"]) / "brain"
+    cwd.mkdir(parents=True, exist_ok=True)
+    cmd = [cfg["claude_bin"], "-p", prompt, "--output-format", "json", "--max-turns", "1",
+           "--tools", "", "--system-prompt", system, "--disable-slash-commands",
+           "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}']
+    if model:
+        cmd += ["--model", model]
+    t0 = time.time()
+    try:
+        p = subprocess.run(cmd, cwd=cwd, env=account_env(account), stdin=subprocess.DEVNULL,
+                           capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           timeout=timeout)
+    except FileNotFoundError:
+        res["error"] = f"Claude CLI not found: {cfg['claude_bin']}"
+        return res
+    except subprocess.TimeoutExpired:
+        res.update(error=f"timed out after {timeout}s", failure="transient")
+        return res
+    res["duration_ms"] = int((time.time() - t0) * 1000)
+    try:
+        msg = json.loads(p.stdout.strip().splitlines()[-1]) if p.stdout.strip() else {}
+    except ValueError:
+        msg = {}
+    if msg:
+        res.update(usage_totals(msg), ok=not msg.get("is_error") and msg.get("subtype") == "success",
+                   text=msg.get("result") or "", cost_usd=msg.get("total_cost_usd") or 0.0,
+                   num_turns=msg.get("num_turns") or 0, session_id=msg.get("session_id"),
+                   duration_ms=msg.get("duration_ms") or res["duration_ms"])
+        by_model = msg.get("modelUsage") or {}
+        if by_model:  # the model that did the work, not the background helper
+            res["model"] = max(by_model, key=lambda m: by_model[m].get("outputTokens") or 0)
+    if not res["ok"]:
+        res["error"] = (msg.get("result") if msg else None) or p.stderr.strip()[-500:] or f"exit {p.returncode}"
+        kind, reset = classify(res["error"])
+        res.update(failure=kind, reset_at=reset, limit=kind == "quota")
+    return res
+
+
+def parse_json_answer(text):
+    """The first JSON object in a model answer, tolerating ```json fences and chatter."""
+    text = (text or "").strip()
+    try:
+        return json.loads(text)
+    except ValueError:
+        pass
+    start, end = text.find("{"), text.rfind("}")
+    if start >= 0 and end > start:
+        try:
+            return json.loads(text[start:end + 1])
+        except ValueError:
+            return None
+    return None

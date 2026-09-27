@@ -141,7 +141,7 @@ th { color: var(--text-2); font-weight: 600; font-size: 12px; }
       <div class="row">
         <div><label>Thư mục dự án (workdir)</label><input id="fWorkdir" placeholder="/home/you/projects/app"></div>
         <div><label>Giao cho</label>
-          <select id="fAgent"><option value="auto">Tự chọn (brain)</option><option value="claude">Claude</option><option value="local">AI local</option></select></div>
+          <select id="fAgent"><option value="auto">Tự chọn (Claude điều phối)</option><option value="claude">Claude agent (sửa code, chạy lệnh)</option><option value="quick">Claude trả lời nhanh (chỉ văn bản)</option><option value="local">AI local</option></select></div>
         <div><label>Lệnh verify (tuỳ chọn)</label><input id="fVerify" placeholder="pytest -q"></div>
       </div>
       <div class="actions"><button class="btn" id="fSubmit">Giao việc</button><span class="small muted" id="fMsg"></span></div>
@@ -248,7 +248,7 @@ function renderTasks() {
       <div>${badge(t.status)}</div>
       <div class="m">
         ${t.kind === "reflection" ? `<span>🧠 Reflection</span>` : ""}${t.branch ? `<span>⎇ ${esc(t.branch)}${t.merged_at ? " ✓" : ""}</span>` : ""}
-        <span>${t.agent ? (t.agent === "claude" ? "Claude" + (t.account ? " · " + esc(t.account) : "") : "Local · " + esc(t.model || "")) : "chưa phân công"}</span>
+        <span>${agentLabel(t)}</span>
         ${t.category ? `<span>${esc(t.category)}</span>` : ""}
         ${t.todos && t.todos.length ? `<span>${t.todos.filter(x => x.status === "completed").length}/${t.todos.length} bước</span>` : ""}
         <span>${dur(t.duration_ms)}</span>
@@ -366,6 +366,13 @@ function renderDetail(t) {
 function safeGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
 function safeSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
 
+function agentLabel(t) {
+  if (!t.agent) return "chưa phân công";
+  const acc = t.account ? " · " + esc(t.account) : "";
+  if (t.agent === "claude") return "Claude agent" + acc;
+  if (t.agent === "quick") return "Claude nhanh" + acc;
+  return "Local · " + esc(t.model || "");
+}
 function describe(e) {
   const d = e.data || {};
   switch (e.kind) {
@@ -373,7 +380,8 @@ function describe(e) {
     case "text": return d.text;
     case "todos": return d.todos.map(t => (t.status === "completed" ? "✓ " : t.status === "in_progress" ? "▶ " : "○ ") + t.content).join("\n");
     case "routed": return `→ ${d.agent} (${d.category}, độ khó ${d.complexity}): ${d.reason}`;
-    case "start": return d.agent === "claude" ? `Claude trên tài khoản ${d.account}${d.resume ? " (tiếp tục session)" : ""}` : `Local model ${d.model}`;
+    case "start": return d.agent === "claude" ? `Claude agent trên tài khoản ${d.account}${d.resume ? " (tiếp tục session)" : ""}`
+      : d.agent === "quick" ? `Claude trả lời nhanh (${d.model}) trên tài khoản ${d.account}` : `Local model ${d.model}`;
     case "account_limit": return `Tài khoản ${d.account} chạm giới hạn, nghỉ tới ${fmtT(d.until)} → chuyển tài khoản`;
     case "handoff": return `Chuyển session: ${d.from} → ${d.to}`;
     case "lessons": return `Áp dụng ${d.texts.length} bài học:\n- ` + d.texts.join("\n- ");
@@ -434,6 +442,7 @@ async function loadStats() {
     return `<div class="acc"><div class="name">${esc(a.name)} ${st}</div>
       <div class="small muted">ưu tiên ${a.priority} · ${esc(a.config_dir)}</div>
       ${limitMeters(a)}
+      ${a.brain_week && a.brain_week.n ? `<div class="small muted" style="margin-top:8px">Điều phối 7 ngày: ${a.brain_week.n} lần · ${fmtN(a.brain_week.tokens)} token · TB ${dur(a.brain_week.dur)}/lần</div>` : ""}
       <div class="small" style="margin-top:8px">5 giờ gần nhất (qua orchestrator): ${a.window_5h.n} lần chạy · $${a.window_5h.cost.toFixed(2)} · ${fmtN(a.window_5h.inp + a.window_5h.outp)} token</div>
       <table><tr><th></th><th>Lần chạy</th><th>Thành công</th><th>Quy đổi API</th><th>TB thời gian</th></tr>
         <tr><td>7 ngày</td><td>${a.week.n}</td><td>${a.week.n ? Math.round(a.week.ok * 100) + "%" : "—"}</td><td>$${a.week.cost.toFixed(2)}</td><td>${dur(a.week.dur)}</td></tr>
@@ -442,7 +451,7 @@ async function loadStats() {
       ${cool ? `<div class="actions"><button class="btn ghost" onclick="resetAcc('${esc(a.name)}')">Dùng lại ngay</button></div>` : ""}
     </div>`;
   }).join("") || `<div class="empty">Chưa cấu hình tài khoản.</div>`;
-  $("#locals").innerHTML = `<p class="small">${stats.local_server_up ? "✓ Local server đang chạy" : "✕ Không kết nối được local server (Ollama)"} · đã xử lý ${stats.local_saved.n} task thay Claude (${fmtN(stats.local_saved.tokens)} token)</p>
+  $("#locals").innerHTML = !stats.local_enabled ? `<p class="small muted">AI local đang tắt: Claude (${esc(stats.brain.model)}) điều phối và trả lời các task văn bản. Bật bằng <code>local.enabled: true</code> nếu muốn giữ task đơn giản trên máy.</p>` : `<p class="small">${stats.local_server_up ? "✓ Local server đang chạy" : "✕ Không kết nối được local server (Ollama)"} · đã xử lý ${stats.local_saved.n} task thay Claude (${fmtN(stats.local_saved.tokens)} token)</p>
     <div class="table-wrap"><table><tr><th>Model</th><th>Đã cài</th><th>Task</th><th>Thành công</th><th>Token</th><th>TB thời gian</th></tr>
     ${stats.local.map(l => `<tr><td>${esc(l.name)}</td><td>${l.installed ? "✓" : "✕"}</td><td>${l.n}</td><td>${l.n ? Math.round(l.ok * 100) + "%" : "—"}</td><td>${fmtN(l.inp + l.outp)}</td><td>${dur(l.dur)}</td></tr>`).join("")}</table></div>`;
   drawChart(stats.daily);
