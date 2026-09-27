@@ -47,14 +47,22 @@ class LocalLLM:
                     "output_tokens": u.get("completion_tokens", 0),
                     "duration_ms": int((time.time() - t0) * 1000)}
         body = {"model": model["name"], "messages": messages, "stream": False,
-                "options": {"temperature": 0.2}}
+                "options": {"temperature": 0.2, **(model.get("options") or {})},
+                "keep_alive": model.get("keep_alive", "30m")}
+        if "think" in model:
+            body["think"] = model["think"]
         if json_mode:
             body["format"] = "json"
         data = self._post(base + "/api/chat", body, timeout)
+        ns = 1e9
         return {"text": (data.get("message") or {}).get("content", ""), "model": model["name"],
                 "input_tokens": data.get("prompt_eval_count", 0),
                 "output_tokens": data.get("eval_count", 0),
-                "duration_ms": int((time.time() - t0) * 1000)}
+                "duration_ms": int((time.time() - t0) * 1000),
+                # Ollama's own timings, used by `orchestrator bench`
+                "load_sec": (data.get("load_duration") or 0) / ns,
+                "prompt_tps": _rate(data.get("prompt_eval_count"), data.get("prompt_eval_duration")),
+                "gen_tps": _rate(data.get("eval_count"), data.get("eval_duration"))}
 
     def chat_json(self, role, system, user):
         model = self.model_for(role)
@@ -66,6 +74,14 @@ class LocalLLM:
             return json.loads(out["text"])
         except Exception:
             return None
+
+    def model_sizes(self):
+        """{name: bytes on disk} for installed Ollama models."""
+        try:
+            data = self._get(self.cfg["ollama_url"].rstrip("/") + "/api/tags", timeout=3)
+            return {m["name"]: m.get("size", 0) for m in data.get("models", [])}
+        except Exception:
+            return {}
 
     @staticmethod
     def _get(url, timeout):
@@ -80,3 +96,7 @@ class LocalLLM:
         req = urllib.request.Request(url, json.dumps(body).encode(), headers)
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read())
+
+
+def _rate(count, duration_ns):
+    return round(count / (duration_ns / 1e9), 1) if count and duration_ns else None

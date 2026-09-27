@@ -7,7 +7,7 @@ import threading
 import time
 from pathlib import Path
 
-from ..accounts import detect_limit
+from ..failures import classify
 
 
 def account_env(account):
@@ -45,7 +45,7 @@ class ClaudeRun:
     """One invocation of the Claude CLI. Call .run(); .cancel() from another thread."""
 
     def __init__(self, cfg, account, prompt, workdir, system_append, on_event,
-                 resume_session=None, model=None):
+                 resume_session=None, model=None, extra_args=()):
         self.cfg = cfg
         self.account = account
         self.prompt = prompt
@@ -54,6 +54,7 @@ class ClaudeRun:
         self.on_event = on_event
         self.resume_session = resume_session
         self.model = model or cfg["claude"].get("model") or ""
+        self.extra_args = list(extra_args)
         self.proc = None
         self.cancelled = False
 
@@ -69,11 +70,13 @@ class ClaudeRun:
             cmd += ["--model", self.model]
         if c.get("allowed_tools"):
             cmd += ["--allowedTools", ",".join(c["allowed_tools"])]
-        if self.system_append:
-            cmd += ["--append-system-prompt", self.system_append]
         if self.resume_session:
+            # The session already carries its system prompt; sending it again costs thousands
+            # of tokens per resume and changes nothing.
             cmd += ["--resume", self.resume_session]
-        return cmd + list(c.get("extra_args") or [])
+        elif self.system_append:
+            cmd += ["--append-system-prompt", self.system_append]
+        return cmd + list(c.get("extra_args") or []) + self.extra_args
 
     def cancel(self):
         self.cancelled = True
@@ -86,8 +89,9 @@ class ClaudeRun:
 
     def run(self):
         res = {"ok": False, "session_id": self.resume_session, "text": "", "cost_usd": 0.0,
-               "input_tokens": 0, "output_tokens": 0, "duration_ms": 0, "num_turns": 0,
-               "limit": False, "reset_at": None, "error": None, "permission_denials": [],
+               "input_tokens": 0, "output_tokens": 0, "cached_tokens": 0, "duration_ms": 0,
+               "num_turns": 0, "failure": None, "limit": False, "reset_at": None, "error": None,
+               "permission_denials": [],
                "model": self.model, "todos": None}
         t0 = time.time()
         stderr_lines = []
@@ -142,15 +146,12 @@ class ClaudeRun:
                             and block.get("is_error"):
                         self.on_event("tool_error", {"text": _text_of(block.get("content"))[:1500]})
             elif t == "result":
-                u = msg.get("usage") or {}
+                tokens = usage_totals(msg)
                 res.update(
                     ok=not msg.get("is_error") and msg.get("subtype") == "success",
                     text=msg.get("result") or last_text,
                     cost_usd=msg.get("total_cost_usd") or 0.0,
-                    input_tokens=(u.get("input_tokens") or 0)
-                    + (u.get("cache_read_input_tokens") or 0)
-                    + (u.get("cache_creation_input_tokens") or 0),
-                    output_tokens=u.get("output_tokens") or 0,
+                    **tokens,
                     num_turns=msg.get("num_turns") or 0,
                     duration_ms=msg.get("duration_ms") or 0,
                     session_id=msg.get("session_id") or res["session_id"],
@@ -174,10 +175,28 @@ class ClaudeRun:
             res["error"] = "\n".join(stderr_lines[-10:]) or f"exit code {self.proc.returncode}"
         if not res["ok"]:
             for text in (res["error"], "\n".join(stderr_lines[-5:])):
-                res["limit"], res["reset_at"] = detect_limit(text)
-                if res["limit"]:
+                kind, reset = classify(text, resumed=bool(self.resume_session), num_turns=res["num_turns"])
+                if kind:
+                    res.update(failure=kind, reset_at=reset, limit=kind == "quota")
                     break
         return res
+
+
+def usage_totals(result_msg):
+    """Token totals for a run. The per-model ledger (modelUsage) also counts subagents and
+    background calls that the top-level `usage` misses; fall back to `usage` when absent."""
+    by_model = result_msg.get("modelUsage") or {}
+    if by_model:
+        t = {"input_tokens": 0, "output_tokens": 0, "cached_tokens": 0}
+        for m in by_model.values():
+            t["input_tokens"] += (m.get("inputTokens") or 0) + (m.get("cacheCreationInputTokens") or 0)
+            t["output_tokens"] += m.get("outputTokens") or 0
+            t["cached_tokens"] += m.get("cacheReadInputTokens") or 0
+        return t
+    u = result_msg.get("usage") or {}
+    return {"input_tokens": (u.get("input_tokens") or 0) + (u.get("cache_creation_input_tokens") or 0),
+            "output_tokens": u.get("output_tokens") or 0,
+            "cached_tokens": u.get("cache_read_input_tokens") or 0}
 
 
 def _todos_from_tool(name, inp, tasks):

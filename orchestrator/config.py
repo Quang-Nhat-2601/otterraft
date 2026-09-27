@@ -36,6 +36,10 @@ DEFAULTS = {
         "stall_after_sec": 300,
         # Copy the session transcript to the next account and --resume there on a limit hit.
         "handoff_on_limit": True,
+        # Overloaded / 429 / network errors: retry the same task after 30s, 60s, 120s, ... up to
+        # this many times before giving up.
+        "transient_retries": 5,
+        "transient_backoff_sec": 30,
         # Prefer another account once the 5-hour window of this one is this full (0-1).
         # Claude Code reports utilization in its stream, so this switches *before* a hard stop.
         "switch_at_utilization": 0.9,
@@ -43,8 +47,10 @@ DEFAULTS = {
     "local": {
         "enabled": True,
         "ollama_url": "http://127.0.0.1:11434",
+        # One model for every role keeps a single model in RAM. "think" is passed to Ollama for
+        # reasoning models ("low" keeps gpt-oss fast on CPU; false turns thinking off).
         "models": [
-            {"name": "qwen2.5-coder:7b", "roles": ["simple", "router", "reflect"]},
+            {"name": "gpt-oss:20b", "roles": ["simple", "router", "reflect"], "think": "low"},
         ],
         "timeout_sec": 300,
         # Retry a failed local task on Claude automatically.
@@ -65,11 +71,26 @@ DEFAULTS = {
     "learning": {
         "enabled": True,
         "max_lessons_in_prompt": 8,
-        # Use the local "reflect" model to extract lessons after each task.
-        "llm_reflection": True,
+        # Per-task lessons from the local "reflect" model. Off by default: the weekly Reflection
+        # Coach (a Claude run over many tasks) finds better, evidence-backed improvements.
+        "llm_reflection": False,
+        # Reflection Coach: every N days (0 = only when you press the button), if at least
+        # coach_min_tasks tasks finished since the last run.
+        "coach_every_days": 7,
+        "coach_min_tasks": 5,
+        "coach_max_tasks": 40,
         # Lessons written by the local model wait for your approval before they reach prompts,
         # so a bad or injected lesson cannot silently steer every later task.
         "auto_approve_llm_lessons": False,
+    },
+    "workspace": {
+        # Run each task in its own git worktree + branch (orch/task-<id>) when the workdir is a
+        # git repo. Tasks on the same repo then run in parallel and your checkout stays untouched
+        # until you press "Merge".
+        "use_worktrees": True,
+        "branch_prefix": "orch/task-",
+        # Run once in each new worktree, e.g. "npm ci" or "uv sync", so tests can run there.
+        "setup_cmd": "",
     },
     "notify": {
         # e.g. "https://ntfy.sh/my-secret-topic" -> push to your phone when tasks finish.

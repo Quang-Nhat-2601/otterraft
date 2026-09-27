@@ -84,6 +84,8 @@ def cmd_login(args, cfg):
         env["CLAUDE_CONFIG_DIR"] = acc["config_dir"]
     print(f"Starting Claude Code for account '{acc['name']}'. Type /login, sign in, then /exit.")
     subprocess.call([cfg["claude_bin"]], env=env)
+    open_db(cfg).execute("UPDATE account_state SET cooldown_until=0, last_error=NULL WHERE name=? "
+                         "AND last_error LIKE 'login required%'", (acc["name"],))
     for line in sync_shared(cfg):
         print(line)
 
@@ -114,6 +116,90 @@ def cmd_doctor(args, cfg):
     sys.exit(0 if ok else 1)
 
 
+BENCH_TEXT = (
+    "Ollama chạy model ngôn ngữ lớn ngay trên máy tính cá nhân. Trên máy không có GPU, tốc độ sinh "
+    "token phụ thuộc chủ yếu vào băng thông RAM chứ không phải số nhân CPU, vì với mỗi token model "
+    "phải đọc toàn bộ trọng số đang hoạt động từ bộ nhớ. Vì vậy các model Mixture-of-Experts, vốn chỉ "
+    "kích hoạt vài tỷ tham số cho mỗi token, thường nhanh hơn nhiều so với model dense cùng kích thước "
+    "trên đĩa. Tuy nhiên chúng vẫn cần đủ RAM để chứa toàn bộ trọng số, và nếu hệ điều hành phải dùng "
+    "swap thì tốc độ sẽ giảm rất mạnh. Khi chọn model, hãy để dư ít nhất vài GB RAM cho hệ điều hành, "
+    "trình duyệt và các công cụ lập trình đang chạy song song.")
+BENCH_DIFF = """--- a/app/auth.py
++++ b/app/auth.py
+@@ def login(email, password):
+-    user = db.find_user(email)
++    user = db.find_user(email.strip().lower())
+     if not user:
+-        raise Exception("no user")
++        raise AuthError("invalid email or password")"""
+
+
+def cmd_bench(args, cfg):
+    """Time each local model on the kinds of work the orchestrator gives it."""
+    from .agents.local import LocalLLM
+    from .router import CLASSIFIER_SYSTEM
+    local = LocalLLM(cfg)
+    sizes = local.model_sizes()
+    if not sizes:
+        sys.exit(f"Ollama is not reachable at {cfg['local']['ollama_url']} (run `ollama serve`).")
+    configured = {m["name"]: m for m in cfg["local"].get("models") or []}
+    names = [n.strip() for n in args.models.split(",")] if args.models else list(configured)
+    try:
+        ram = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    except (ValueError, OSError, AttributeError):
+        ram = None
+    gb = lambda b: f"{b / 2**30:.1f} GB"
+    print(f"RAM: {gb(ram) if ram else 'unknown'}\n")
+    rows = []
+    for name in names:
+        model = configured.get(name, {"name": name, "think": "low" if "gpt-oss" in name else None})
+        if model.get("think") is None:
+            model.pop("think", None)
+        if name not in sizes:
+            print(f"{name}: not installed -> ollama pull {name}\n")
+            continue
+        warn = "  !! uses over 60% of RAM: expect swapping with a browser and IDE open" \
+            if ram and sizes[name] > 0.6 * ram else ""
+        print(f"{name} ({gb(sizes[name])} on disk){warn}")
+        tests = [
+            ("router", CLASSIFIER_SYSTEM, "Sửa test đăng nhập đang fail trong src/auth.py và thêm test cho email có dấu cách", True),
+            ("summarize", "Summarize in 3 bullet points, in Vietnamese.", BENCH_TEXT, False),
+            ("commit msg", "Write a conventional commit message for this diff. Output only the message.", BENCH_DIFF, False),
+        ]
+        r = {"model": name, "size": sizes[name]}
+        for label, system, user, as_json in tests:
+            try:
+                out = local.chat(model, [{"role": "system", "content": system},
+                                         {"role": "user", "content": user}], json_mode=as_json, timeout=600)
+            except Exception as e:
+                print(f"  {label:<11} FAILED: {e}")
+                continue
+            extra = ""
+            if as_json:
+                try:
+                    cat = json.loads(out["text"]).get("category")
+                    extra = f"  -> category={cat} ({'ok' if cat in ('bugfix', 'test') else 'unexpected'})"
+                except ValueError:
+                    extra = "  -> INVALID JSON"
+                r["router_sec"] = out["duration_ms"] / 1000
+            if out["load_sec"] > 1:
+                extra += f"  (first call loaded the model in {out['load_sec']:.0f}s)"
+            print(f"  {label:<11} {out['duration_ms'] / 1000:6.1f}s  prompt {out['prompt_tps'] or '?':>6} tok/s"
+                  f"  generate {out['gen_tps'] or '?':>5} tok/s{extra}")
+            r.setdefault("gen", []).append(out["gen_tps"] or 0)
+        rows.append(r)
+        print()
+    for r in rows:
+        gen = min(r.get("gen") or [0])
+        verdict = ("good for simple tasks" if gen >= 10 else
+                   "usable but slow; keep it to short answers" if gen >= 5 else
+                   "too slow on this machine; pick a smaller or MoE model")
+        router = r.get("router_sec")
+        tip = "" if router is None or router < 15 else \
+            "; routing takes too long, set router.use_llm_classifier=false (keyword routing)"
+        print(f"{r['model']}: {verdict}{tip}")
+
+
 def main():
     ap = argparse.ArgumentParser(prog="orchestrator")
     ap.add_argument("--config", default=os.environ.get("ORCH_CONFIG", "orchestrator.json"))
@@ -130,10 +216,12 @@ def main():
     l = sub.add_parser("login", help="log an account in (opens Claude Code with its config dir)")
     l.add_argument("account")
     sub.add_parser("doctor", help="check CLI, logins and local models")
+    b = sub.add_parser("bench", help="measure local models on this machine")
+    b.add_argument("-m", "--models", help="comma-separated Ollama tags (default: the configured ones)")
     args = ap.parse_args()
     cfg = config.load(args.config) if args.cmd != "init" else None
     {"init": cmd_init, "serve": cmd_serve, "add": cmd_add, "accounts": cmd_accounts,
-     "login": cmd_login, "doctor": cmd_doctor}[args.cmd](args, cfg)
+     "login": cmd_login, "doctor": cmd_doctor, "bench": cmd_bench}[args.cmd](args, cfg)
 
 
 if __name__ == "__main__":

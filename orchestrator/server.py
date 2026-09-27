@@ -7,7 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import config
+from . import config, workspace
 
 STATIC = Path(__file__).parent / "static"
 
@@ -95,6 +95,17 @@ class Handler(BaseHTTPRequestHandler):
         o = self.orch
         if p == "/api/tasks":
             return self._send(200, o.db.tasks())
+        if p.startswith("/api/tasks/") and p.endswith("/diff"):
+            t = o.db.task(int(p.split("/")[3]))
+            if not t or not t.get("branch") or not t.get("exec_dir"):
+                return self._send(404, {"error": "no worktree for this task"})
+            try:
+                return self._send(200, {"diff": workspace.diff(t)})
+            except workspace.WorkspaceError as e:
+                return self._send(409, {"error": str(e)})
+        if p == "/api/proposals":
+            return self._send(200, o.db.query("SELECT * FROM proposals ORDER BY "
+                                              "CASE status WHEN 'pending' THEN 0 ELSE 1 END, id DESC LIMIT 200"))
         if p.startswith("/api/tasks/") and p.endswith("/events"):
             tid = int(p.split("/")[3])
             return self._send(200, o.db.events(tid, int(q.get("after", ["0"])[0])))
@@ -141,14 +152,36 @@ class Handler(BaseHTTPRequestHandler):
             elif action == "retry":
                 o.db.update_task(tid, status="queued", agent=None if b.get("reroute") else o.db.task(tid)["agent"],
                                  agent_pref=b.get("agent_pref") or o.db.task(tid)["agent_pref"],
-                                 session_id=None, pending_message=None, error=None, progress=0, todos=None)
+                                 session_id=None, pending_message=None, error=None, progress=0, todos=None,
+                                 retries=0, session_resets=0, not_before=None)
                 o.emit(tid, "retry", b)
                 o.changed(tid)
+            elif action in ("merge", "discard"):
+                try:
+                    if action == "merge":
+                        return self._send(200, {"ok": True, "head": o.merge(tid)})
+                    o.discard_worktree(tid, bool(b.get("delete_branch")))
+                except workspace.WorkspaceError as e:
+                    return self._send(409, {"error": str(e)})
             else:
                 return self._send(404, {"error": "unknown action"})
             return self._send(200, {"ok": True})
         if len(parts) == 4 and parts[:2] == ["api", "accounts"] and parts[3] == "reset":
             o.pool.reset(parts[2])
+            return self._send(200, {"ok": True})
+        if p == "/api/coach/run":
+            tid = o.run_coach(manual=True)
+            return self._send(201 if tid else 409, {"id": tid} if tid else
+                              {"error": "no finished tasks in the last 30 days to reflect on"})
+        if len(parts) == 3 and parts[:2] == ["api", "proposals"]:
+            pid, act = int(parts[2]), b.get("action")
+            try:
+                {"apply": o.coach.apply, "reject": o.coach.reject, "rollback": o.coach.rollback}[act](pid)
+            except KeyError:
+                return self._send(400, {"error": "action must be apply, reject or rollback"})
+            except (ValueError, OSError) as e:
+                o.db.execute("UPDATE proposals SET error=? WHERE id=?", (str(e), pid))
+                return self._send(409, {"error": str(e)})
             return self._send(200, {"ok": True})
         if p == "/api/lessons":
             lid = o.learner.add_lesson(b.get("text", ""), b.get("scope") or "global", b.get("tags") or [])

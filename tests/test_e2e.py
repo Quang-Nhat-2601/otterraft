@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import threading
@@ -13,7 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import config  # noqa: E402
-from orchestrator.accounts import detect_limit  # noqa: E402
+from orchestrator.failures import classify, parse_reset  # noqa: E402
 from orchestrator.agents.report import parse_report  # noqa: E402
 from orchestrator.bus import Bus  # noqa: E402
 from orchestrator.db import DB  # noqa: E402
@@ -73,9 +74,15 @@ class E2E(unittest.TestCase):
         cls.tmp = tempfile.mkdtemp()
         cls.ollama = ThreadingHTTPServer(("127.0.0.1", 0), FakeOllama)
         threading.Thread(target=cls.ollama.serve_forever, daemon=True).start()
+        cls.shared = Path(cls.tmp) / "home" / ".claude"
+        cls.shared.mkdir(parents=True)
+        cls.log = Path(cls.tmp) / "claude-calls.jsonl"
+        os.environ["FAKE_CLAUDE_LOG"] = str(cls.log)
         cfg_path = Path(cls.tmp) / "orchestrator.json"
         cfg_path.write_text(json.dumps({
             "port": 0, "data_dir": cls.tmp + "/data", "claude_bin": FAKE_CLAUDE,
+            "shared_config_dir": str(cls.shared), "claude": {"transient_backoff_sec": 0.2},
+            "learning": {"llm_reflection": True},  # opt-in per-task lessons, tested below
             "accounts": [
                 {"name": "acc1", "config_dir": cls.tmp + "/limited-acc1", "priority": 1},
                 {"name": "acc2", "config_dir": cls.tmp + "/acc2", "priority": 2},
@@ -97,6 +104,12 @@ class E2E(unittest.TestCase):
         cls.httpd.shutdown()
         cls.ollama.shutdown()
 
+    def calls(self):
+        return [json.loads(l) for l in self.log.read_text().splitlines()]
+
+    def wait_status(self, tid, statuses=("review", "failed")):
+        return wait_for(lambda: (lambda t: t if t["status"] in statuses else None)(self.api(f"/api/tasks/{tid}")))
+
     def api(self, path, body=None):
         req = urllib.request.Request(self.base + path, json.dumps(body).encode() if body is not None else None,
                                      {"Content-Type": "application/json",
@@ -116,6 +129,12 @@ class E2E(unittest.TestCase):
         self.assertEqual(t["report"]["test_cases"][0]["title"], "Login with blank email")
         self.assertTrue(t["verify"]["ok"])
         self.assertEqual(t["progress"], 1.0)
+        # modelUsage counts every model (incl. background Haiku calls); cache reads kept apart
+        self.assertEqual(t["input_tokens"], 1 + 1400)  # the limited run + the resumed one
+        self.assertEqual(t["cached_tokens"], 500)
+        resumed = [c for c in self.calls() if "--resume" in c["args"]]
+        self.assertTrue(resumed)
+        self.assertTrue(all("--append-system-prompt" not in c["args"] for c in resumed))
         kinds = [e["kind"] for e in self.api(f"/api/tasks/{tid}/events")]
         for k in ("routed", "account_limit", "handoff", "todos", "tool", "verify", "finished", "learned"):
             self.assertIn(k, kinds)
@@ -145,7 +164,7 @@ class E2E(unittest.TestCase):
             self.api(f"/api/tasks/{tid}")))
         self.assertEqual(t["agent"], "local")
         self.assertIn("Tóm tắt", t["result_text"])
-        self.assertIn("workspaces", t["workdir"])  # never the orchestrator's own directory
+        self.assertFalse(t["exec_dir"])  # a local model has no tools, so no directory
         self.assertEqual(t["status"], "review")
 
     def test_local_failure_escalates_to_claude(self):
@@ -156,6 +175,77 @@ class E2E(unittest.TestCase):
             self.api(f"/api/tasks/{tid}")))
         self.assertEqual(t["agent"], "claude")
         self.assertIn("escalated", t["route_reason"])
+
+    def test_worktree_branch_merge_and_cleanup(self):
+        repo = Path(tempfile.mkdtemp()) / "app"
+        repo.mkdir()
+        g = lambda *a: subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True, text=True).stdout
+        g("init", "-q", "-b", "main")
+        (repo / "README.md").write_text("hi\n")
+        g("add", "-A")
+        g("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
+        (repo / "CLAUDE.md").write_text("# rules not committed yet\n")
+        tid = self.api("/api/tasks", {"prompt": "Fix the bug in app.py", "workdir": str(repo),
+                                      "agent_pref": "claude"})["id"]
+        t = self.wait_status(tid)
+        self.assertEqual(t["status"], "review", t.get("error"))
+        self.assertEqual(t["branch"], f"orch/task-{tid}")
+        self.assertNotEqual(t["exec_dir"], str(repo))
+        self.assertEqual(t["changed_files"], ["fix.txt"])  # the CLAUDE.md overlay is not committed
+        self.assertEqual((Path(t["exec_dir"]) / "CLAUDE.md").read_text(), "# rules not committed yet\n")
+        self.assertIn("1 file changed", t["diffstat"])
+        self.assertFalse((repo / "fix.txt").exists())  # your checkout untouched until merge
+        self.assertIn("fix.txt", self.api(f"/api/tasks/{tid}/diff")["diff"])
+        self.api(f"/api/tasks/{tid}/merge", {})
+        self.assertTrue((repo / "fix.txt").exists())
+        self.api(f"/api/tasks/{tid}/discard", {"delete_branch": True})
+        self.assertFalse(Path(t["exec_dir"]).exists())
+        self.assertNotIn(f"orch/task-{tid}", g("branch"))
+
+    def test_transient_error_retries_same_task(self):
+        tid = self.api("/api/tasks", {"prompt": "OVERLOAD fix app.py", "agent_pref": "claude"})["id"]
+        t = self.wait_status(tid)
+        self.assertEqual(t["status"], "review", t.get("error"))
+        self.assertEqual(t["retries"], 1)
+        self.assertIn("workspaces", t["exec_dir"])  # never the orchestrator's own directory
+        kinds = [e["kind"] for e in self.api(f"/api/tasks/{tid}/events")]
+        self.assertIn("retry_later", kinds)
+        self.assertNotIn("account_limit", kinds)  # overload is not a quota problem
+
+    def test_unresumable_session_starts_fresh(self):
+        tid = self.api("/api/tasks", {"prompt": "Fix app.py", "agent_pref": "claude"})["id"]
+        self.wait_status(tid)
+        self.orch.db.update_task(tid, session_id="00000000-dead-beef-0000-000000000000")
+        self.api(f"/api/tasks/{tid}/reply", {"message": "also add a test"})
+        t = wait_for(lambda: (lambda t: t if t["status"] in ("review", "failed") and t["session_resets"] else None)(
+            self.api(f"/api/tasks/{tid}")))
+        self.assertEqual(t["status"], "review", t.get("error"))
+        self.assertIn("session_reset", [e["kind"] for e in self.api(f"/api/tasks/{tid}/events")])
+        last = self.calls()[-1]
+        self.assertNotIn("--resume", last["args"])
+        self.assertIn("also add a test", last["args"][last["args"].index("-p") + 1])
+
+    def test_reflection_coach_proposes_and_applies_with_rollback(self):
+        for _ in range(2):
+            self.wait_status(self.api("/api/tasks", {"prompt": "Fix app.py", "agent_pref": "claude"})["id"])
+        tid = self.api("/api/coach/run", {})["id"]
+        t = self.wait_status(tid)
+        self.assertEqual(t["status"], "review", t.get("error"))
+        self.assertIn("--tools", self.calls()[-1]["args"])  # read-only run
+        props = {p["title"]: p for p in self.api("/api/proposals") if p["task_id"] == tid}
+        self.assertEqual(props["No evidence"]["status"], "invalid")
+        glob_p, skill_p = props["Always run the test suite"], props["Deploy skill"]
+        self.assertEqual(glob_p["status"], "pending")
+        self.assertFalse((self.shared / "CLAUDE.md").exists())  # nothing written before approval
+        (self.shared / "CLAUDE.md").write_text("# My rules\n" + "- keep it simple\n" * 100)
+        self.api(f"/api/proposals/{glob_p['id']}", {"action": "apply"})
+        self.api(f"/api/proposals/{skill_p['id']}", {"action": "apply"})
+        self.assertIn("## Testing", (self.shared / "CLAUDE.md").read_text())
+        self.assertTrue((self.shared / "skills" / "deploy-checklist" / "SKILL.md").exists())
+        self.api(f"/api/proposals/{glob_p['id']}", {"action": "rollback"})
+        self.api(f"/api/proposals/{skill_p['id']}", {"action": "rollback"})
+        self.assertNotIn("## Testing", (self.shared / "CLAUDE.md").read_text())
+        self.assertFalse((self.shared / "skills" / "deploy-checklist").exists())
 
     def test_api_rejects_cross_site_and_tokenless_requests(self):
         body = json.dumps({"prompt": "x", "verify_cmd": "touch /tmp/pwned"}).encode()
@@ -173,12 +263,42 @@ class E2E(unittest.TestCase):
 
 
 class Units(unittest.TestCase):
-    def test_detect_limit(self):
-        self.assertEqual(detect_limit("Claude AI usage limit reached|1737000000"), (True, 1737000000))
-        self.assertEqual(detect_limit("You've hit your limit · resets 3pm"), (True, None))
-        self.assertEqual(detect_limit("SyntaxError in foo.py"), (False, None))
+    def test_classify_failures(self):
+        import datetime as dt
+        self.assertEqual(classify("Claude AI usage limit reached|1737000000"), ("quota", 1737000000))
+        self.assertEqual(classify("You've hit your limit · resets 3pm")[0], "quota")
+        self.assertEqual(classify('API Error: 529 {"type":"overloaded_error"}'), ("transient", None))
+        self.assertEqual(classify("Invalid API key · Please run /login"), ("login", None))
+        self.assertEqual(classify("No conversation found with session ID: x", resumed=True), ("bad_session", None))
+        self.assertEqual(classify("No conversation found with session ID: x"), (None, None))
+        self.assertEqual(classify("SyntaxError in foo.py"), (None, None))
         prose = "I added a rate limiter; the API now returns 429 when usage limit reached. " * 20
-        self.assertEqual(detect_limit(prose), (False, None))
+        self.assertEqual(classify(prose), (None, None))
+        now = dt.datetime(2026, 9, 27, 10, 0, tzinfo=dt.timezone.utc)
+        at = lambda t: dt.datetime.fromtimestamp(parse_reset(t, now), dt.timezone.utc)
+        self.assertEqual(at("resets 3pm (Asia/Ho_Chi_Minh)"), dt.datetime(2026, 9, 28, 8, 0, tzinfo=dt.timezone.utc))
+        self.assertEqual(at("resets 11:30am (UTC)"), dt.datetime(2026, 9, 27, 11, 30, tzinfo=dt.timezone.utc))
+        self.assertEqual(at("resets Oct 3, 9:30am (UTC)"), dt.datetime(2026, 10, 3, 9, 30, tzinfo=dt.timezone.utc))
+        self.assertIsNone(parse_reset("resets soon", now))
+
+    def test_logged_out_account_is_parked_and_task_moves_on(self):
+        tmp = tempfile.mkdtemp()
+        cfg_path = Path(tmp) / "o.json"
+        cfg_path.write_text(json.dumps({
+            "data_dir": tmp + "/data", "claude_bin": FAKE_CLAUDE, "local": {"enabled": False},
+            "accounts": [{"name": "old", "config_dir": tmp + "/loggedout", "priority": 1},
+                         {"name": "ok", "config_dir": tmp + "/ok", "priority": 2}]}))
+        orch = Orchestrator(config.load(cfg_path), DB(Path(tmp) / "o.db"), Bus())
+        orch.start()
+        try:
+            tid = orch.submit("Fix app.py", agent_pref="claude")
+            t = wait_for(lambda: (lambda t: t if t["status"] in ("review", "failed") else None)(orch.db.task(tid)))
+            self.assertEqual((t["status"], t["account"]), ("review", "ok"), t.get("error"))
+            st = orch.pool.state("old")
+            self.assertIn("login required", st["last_error"])
+            self.assertGreater(st["cooldown_until"], time.time() + 365 * 86400)
+        finally:
+            orch.stop.set()
 
     def test_suggest_rule(self):
         from orchestrator.learning import suggest_rule

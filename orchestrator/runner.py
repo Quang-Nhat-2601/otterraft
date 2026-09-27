@@ -6,15 +6,20 @@ import traceback
 import urllib.request
 from pathlib import Path
 
+from . import workspace
 from .accounts import AccountPool
 from .agents.claude import ClaudeRun, handoff_session
 from .agents.local import LocalLLM
 from .agents.report import REPORT_INSTRUCTIONS, parse_report, strip_report
+from .coach import COACH_SYSTEM, Coach
 from .learning import Learner
 from .router import Router
 
-CONTINUE_MSG = ("You were interrupted (the orchestrator switched Claude accounts). "
+CONTINUE_MSG = ("You were interrupted (provider limit, account switch or connection problem). "
                 "Continue the task exactly where you left off, then finish with the report block.")
+RESTART_NOTE = ("\n\n(An earlier attempt at this task was interrupted and could not be resumed. "
+                "Check the working tree for partial progress before redoing anything.)")
+PARKED_SEC = 10 * 365 * 86400  # "until you log in again"
 
 
 class Orchestrator:
@@ -24,8 +29,9 @@ class Orchestrator:
         self.pool = AccountPool(cfg, db)
         self.router = Router(cfg, db, self.local)
         self.learner = Learner(cfg, db, self.local)
+        self.coach = Coach(cfg, db)
         self.active = {}          # task_id -> ClaudeRun (for cancel)
-        self.busy_dirs = set()    # one writer per working directory
+        self.busy = {}            # task_id -> lock key (a directory, or the task itself)
         self.lock = threading.Lock()
         self.stop = threading.Event()
         self.stall_flagged = set()
@@ -53,17 +59,30 @@ class Orchestrator:
             pass
 
     # -- public API ----------------------------------------------------------------
-    def submit(self, prompt, title="", workdir="", agent_pref="auto", verify_cmd=""):
+    def submit(self, prompt, title="", workdir="", agent_pref="auto", verify_cmd="", kind="task", **extra):
         tid = self.db.create_task(prompt=prompt, title=title or prompt.strip().split("\n")[0][:80],
                                   workdir=workdir, agent_pref=agent_pref, verify_cmd=verify_cmd,
-                                  status="queued")
-        self.emit(tid, "created", {"agent_pref": agent_pref})
+                                  status="queued", kind=kind, **extra)
+        self.emit(tid, "created", {"agent_pref": agent_pref, "kind": kind})
         self.changed(tid)
         return tid
 
+    def run_coach(self, manual=False):
+        """Queue a Reflection Coach run over tasks finished since the last one. A manual run with
+        nothing new looks back 30 days instead. Returns the task id, or None if there is no evidence."""
+        run_dir, n = self.coach.prepare_run()
+        if not run_dir and manual:
+            run_dir, n = self.coach.prepare_run(since=time.time() - 30 * 86400)
+        if not run_dir:
+            return None
+        return self.submit("Review evidence.json and targets.json and propose improvements.",
+                           title=f"Reflection Coach: {n} task", workdir=run_dir, agent_pref="claude",
+                           kind="reflection", agent="claude", category="reflection",
+                           route_reason="reflection coach (manual)" if manual else "reflection coach (scheduled)")
+
     def reply(self, task_id, message):
         """Answer a needs_input task, or send follow-up instructions to a finished one."""
-        self.db.update_task(task_id, pending_message=message, status="queued", error=None)
+        self.db.update_task(task_id, pending_message=message, status="queued", error=None, not_before=None)
         self.emit(task_id, "user_message", {"text": message})
         self.changed(task_id)
 
@@ -89,6 +108,29 @@ class Orchestrator:
                                     "Fix it, then finish with the report block.")
         self.changed(task_id)
 
+    def merge(self, task_id):
+        task = self.db.task(task_id)
+        if not task.get("branch") or task.get("merged_at"):
+            raise workspace.WorkspaceError("task has no unmerged branch")
+        if task["status"] in ("queued", "running"):
+            raise workspace.WorkspaceError("task is still running")
+        head = workspace.merge(task)
+        self.db.update_task(task_id, merged_at=time.time())
+        self.emit(task_id, "merged", {"branch": task["branch"], "into": task["base_branch"], "head": head})
+        self.changed(task_id)
+        return head
+
+    def discard_worktree(self, task_id, delete_branch=False):
+        task = self.db.task(task_id)
+        if not task.get("branch"):
+            raise workspace.WorkspaceError("task has no worktree")
+        if task["status"] in ("queued", "running"):
+            raise workspace.WorkspaceError("task is still running")
+        workspace.remove(task, delete_branch=delete_branch)
+        self.db.update_task(task_id, exec_dir=None)
+        self.emit(task_id, "worktree_removed", {"branch_deleted": delete_branch})
+        self.changed(task_id)
+
     # -- scheduler -------------------------------------------------------------------
     def start(self):
         threading.Thread(target=self._loop, daemon=True, name="scheduler").start()
@@ -109,8 +151,11 @@ class Orchestrator:
                 self.stall_flagged.add(t["id"])
                 self.emit(t["id"], "stalled", {"idle_sec": int(now - t["last_event_at"])})
                 self.notify(f"Task #{t['id']} stalled", f"No activity for {int(now - t['last_event_at'])}s")
-        for task in self.db.query("SELECT * FROM tasks WHERE status='queued' ORDER BY id"):
+        for task in self.db.query("SELECT * FROM tasks WHERE status='queued' AND "
+                                  "(not_before IS NULL OR not_before<=?) ORDER BY id", (now,)):
             self._try_start(task)
+        if self.coach.due(now):
+            self.run_coach()
 
     def _route(self, task):
         """Classification may call a local LLM (seconds), so it runs off the scheduler thread."""
@@ -122,6 +167,16 @@ class Orchestrator:
         finally:
             self.routing.discard(task["id"])
 
+    def _lock_key(self, task):
+        """Tasks in their own worktree never collide; tasks run in place share their directory."""
+        if task.get("exec_dir") and task.get("branch"):
+            return f"task:{task['id']}"
+        wd = task.get("workdir") or ""
+        if (task.get("kind") == "task" and task.get("agent") == "claude" and wd
+                and self.cfg["workspace"].get("use_worktrees") and workspace.repo_root(wd)):
+            return f"task:{task['id']}"  # will get a worktree
+        return wd or f"task:{task['id']}"
+
     def _try_start(self, task):
         if task["id"] in self.routing:
             return
@@ -129,49 +184,65 @@ class Orchestrator:
             self.routing.add(task["id"])
             threading.Thread(target=self._route, args=(task,), daemon=True).start()
             return
-        if not task.get("workdir"):
-            # Never let an agent loose in the orchestrator's own directory.
-            wd = Path(self.cfg["data_dir"]) / "workspaces" / f"task-{task['id']}"
-            wd.mkdir(parents=True, exist_ok=True)
-            self.db.update_task(task["id"], workdir=str(wd))
-            task = self.db.task(task["id"])
-        wd = task.get("workdir") or ""
+        key = self._lock_key(task)
         with self.lock:
-            if wd and wd in self.busy_dirs:
+            if key in self.busy.values():
                 return
         account = None
         if task["agent"] == "claude":
             account = self.pool.acquire()
             if not account:
-                return  # all accounts busy or cooling down; stay queued
+                return  # all accounts busy, cooling down or parked; stay queued
         with self.lock:
-            if wd:
-                self.busy_dirs.add(wd)
+            self.busy[task["id"]] = key
         self.db.update_task(task["id"], status="running", started_at=task.get("started_at") or time.time(),
-                            attempts=(task.get("attempts") or 0) + 1, last_event_at=time.time())
+                            attempts=(task.get("attempts") or 0) + 1, last_event_at=time.time(),
+                            not_before=None)
         self.stall_flagged.discard(task["id"])
         self.changed(task["id"])
-        target = self._run_claude if account else self._run_local
-        args = (task, account) if account else (task,)
-        threading.Thread(target=self._guard, args=(target, task, account, args), daemon=True).start()
+        threading.Thread(target=self._guard, args=(task, account), daemon=True).start()
 
-    def _guard(self, target, task, account, args):
+    def _guard(self, task, account):
         try:
-            target(*args)
+            if task["agent"] == "claude":
+                task = self._prepare_workspace(task)
+                self._run_claude(task, account)
+            else:
+                self._run_local(task)
         except Exception as e:
             traceback.print_exc()
-            self.db.update_task(task["id"], status="failed", error=f"orchestrator error: {e}")
+            self.db.update_task(task["id"], status="failed", error=f"orchestrator error: {e}",
+                                finished_at=time.time())
             self.emit(task["id"], "error", {"text": str(e)})
         finally:
             if account:
                 self.pool.release(account["name"])
             with self.lock:
-                self.busy_dirs.discard(task.get("workdir") or "")
+                self.busy.pop(task["id"], None)
             self.active.pop(task["id"], None)
             self.changed(task["id"])
 
+    def _prepare_workspace(self, task):
+        if task.get("exec_dir"):
+            return task
+        fields = None
+        if not task.get("workdir"):
+            # Never let an agent loose in the orchestrator's own directory.
+            wd = Path(self.cfg["data_dir"]) / "workspaces" / f"task-{task['id']}"
+            wd.mkdir(parents=True, exist_ok=True)
+            fields = {"workdir": str(wd), "exec_dir": str(wd)}
+        elif task.get("kind") == "task":
+            fields = workspace.prepare(self.cfg, task)
+            if fields:
+                self.emit(task["id"], "worktree", {"branch": fields["branch"], "path": fields["exec_dir"],
+                                                   "base": fields["base_branch"]})
+        self.db.update_task(task["id"], **(fields or {"exec_dir": task["workdir"]}))
+        return self.db.task(task["id"])
+
     # -- Claude --------------------------------------------------------------------------
     def _system_prompt(self, task):
+        if task.get("kind") == "reflection":
+            return COACH_SYSTEM
         lessons = self.learner.relevant_lessons(task["prompt"], task.get("workdir"))
         if lessons:
             self.emit(task["id"], "lessons", {"ids": [l["id"] for l in lessons],
@@ -180,18 +251,20 @@ class Orchestrator:
 
     def _run_claude(self, task, account):
         tid = task["id"]
-        resume, prompt = None, task["prompt"]
-        if task.get("session_id") and task.get("pending_message"):
-            prompt = task["pending_message"]
-            resume = task["session_id"]
+        message, resume = task.get("pending_message"), None
+        if task.get("session_id") and message:
+            prompt, resume = message, task["session_id"]
             prev = next((a for a in self.cfg["accounts"] if a["name"] == task.get("account")), None)
             if prev and prev["name"] != account["name"]:
                 if handoff_session(resume, prev, account):
                     self.emit(tid, "handoff", {"from": prev["name"], "to": account["name"]})
                 else:
                     self.emit(tid, "handoff_failed", {"from": prev["name"], "to": account["name"]})
-                    resume, prompt = None, f"{task['prompt']}\n\n(Earlier attempt was interrupted; " \
-                                           f"check the working tree for partial progress.)\n{task['pending_message']}"
+                    resume = None
+        if not resume:
+            prompt = task["prompt"]
+            if message:
+                prompt += RESTART_NOTE + ("" if message == CONTINUE_MSG else f"\n\n{message}")
         self.db.update_task(tid, account=account["name"], pending_message=None)
         self.emit(tid, "start", {"agent": "claude", "account": account["name"], "resume": bool(resume)})
 
@@ -209,8 +282,11 @@ class Orchestrator:
                 self.changed(tid)
             self.emit(tid, kind, data)
 
-        run = ClaudeRun(self.cfg, account, prompt, task.get("workdir"), self._system_prompt(task),
-                        on_event, resume_session=resume)
+        extra = ["--tools", "Read,Grep,Glob"] if task.get("kind") == "reflection" else []
+        # A resumed session keeps its original system prompt, so only a fresh run builds one.
+        system = None if resume else self._system_prompt(task)
+        run = ClaudeRun(self.cfg, account, prompt, task.get("exec_dir") or task.get("workdir"),
+                        system, on_event, resume_session=resume, extra_args=extra)
         self.active[tid] = run
         res = run.run()
         if run.cancelled:
@@ -220,27 +296,55 @@ class Orchestrator:
             tid, cost_usd=(cur["cost_usd"] or 0) + res["cost_usd"],
             input_tokens=(cur["input_tokens"] or 0) + res["input_tokens"],
             output_tokens=(cur["output_tokens"] or 0) + res["output_tokens"],
+            cached_tokens=(cur["cached_tokens"] or 0) + res["cached_tokens"],
             duration_ms=(cur["duration_ms"] or 0) + res["duration_ms"],
             num_turns=(cur["num_turns"] or 0) + res["num_turns"],
             session_id=res["session_id"], model=res["model"])
         self.db.add_usage(task_id=tid, kind="claude", name=account["name"], model=res["model"],
                           cost_usd=res["cost_usd"], input_tokens=res["input_tokens"],
-                          output_tokens=res["output_tokens"], duration_ms=res["duration_ms"],
-                          ok=1 if res["ok"] else 0, category=task.get("category"))
+                          output_tokens=res["output_tokens"], cached_tokens=res["cached_tokens"],
+                          duration_ms=res["duration_ms"], ok=1 if res["ok"] else 0,
+                          category=task.get("category"))
         self.learner.record_permission_denials(tid, res["permission_denials"])
         if res["permission_denials"]:
             self.emit(tid, "permission_denials", {"items": res["permission_denials"][:20]})
-
-        if res["limit"]:
-            until = self.pool.cool_down(account["name"], res["reset_at"], res["error"] or "")
-            self.emit(tid, "account_limit", {"account": account["name"], "until": until})
-            self.notify("Account limit", f"{account['name']} hit its limit; switching account")
-            if self.cfg["claude"]["handoff_on_limit"] and res["session_id"]:
-                self.db.update_task(tid, status="queued", pending_message=CONTINUE_MSG)
-            else:
-                self.db.update_task(tid, status="queued")
+        if not res["ok"] and self._recover(self.db.task(tid), account, res, message):
             return
         self._finish(self.db.task(tid), res["ok"], res["text"], res["error"])
+
+    def _recover(self, task, account, res, message):
+        """Handle a failure that is not the task's fault. Returns True when the task was requeued."""
+        tid, name, kind = task["id"], account["name"], res["failure"]
+        if kind == "quota":
+            until = self.pool.cool_down(name, res["reset_at"] or self.pool.window_reset(name), res["error"] or "")
+            self.emit(tid, "account_limit", {"account": name, "until": until})
+            self.notify("Account limit", f"{name} is out of usage until {time.ctime(until)}; switching account")
+        elif kind == "login":
+            self.pool.cool_down(name, time.time() + PARKED_SEC,
+                                f"login required: run `python -m orchestrator login {name}`")
+            self.emit(tid, "account_login_required", {"account": name})
+            self.notify("Account logged out", f"{name} needs `python -m orchestrator login {name}`")
+        elif kind == "transient":
+            n = (task.get("retries") or 0) + 1
+            if n > self.cfg["claude"].get("transient_retries", 5):
+                return False
+            delay = min(self.cfg["claude"].get("transient_backoff_sec", 30) * 2 ** (n - 1), 900)
+            self.db.update_task(tid, retries=n, not_before=time.time() + delay)
+            self.emit(tid, "retry_later", {"attempt": n, "in_sec": delay, "error": (res["error"] or "")[:300]})
+        elif kind == "bad_session":
+            if (task.get("session_resets") or 0) >= 1:
+                return False
+            # The transcript cannot be resumed (see Paperclip's poisoned-session guard): start over.
+            self.db.update_task(tid, status="queued", session_id=None, pending_message=message,
+                                session_resets=(task.get("session_resets") or 0) + 1)
+            self.emit(tid, "session_reset", {"error": (res["error"] or "")[:300]})
+            return True
+        else:
+            return False
+        # Resume where it stopped if the run got anywhere; otherwise resend what it was given.
+        progressed = res["num_turns"] > 0 and res["session_id"]
+        self.db.update_task(tid, status="queued", pending_message=CONTINUE_MSG if progressed else message)
+        return True
 
     # -- local ---------------------------------------------------------------------------
     def _run_local(self, task):
@@ -278,11 +382,20 @@ class Orchestrator:
 
     # -- completion ----------------------------------------------------------------------
     def _finish(self, task, ok, text, error):
+        if task.get("kind") == "reflection":
+            return self._finish_reflection(task, ok, text, error)
         tid = task["id"]
         report = parse_report(text) or ({"status": "done" if ok else "failed",
                                          "summary": strip_report(text)[:1500],
                                          "output": [], "test_cases": []} if text else None)
-        changed_files = git_changes(task.get("workdir"))
+        changed_files, diffstat = None, None
+        if task.get("branch") and task.get("exec_dir"):
+            try:
+                changed_files, diffstat = workspace.commit(task)
+            except workspace.WorkspaceError as e:
+                self.emit(tid, "error", {"text": f"could not commit the worktree: {e}"})
+        elif task.get("agent") == "claude":
+            changed_files = git_changes(task.get("exec_dir") or task.get("workdir"))
         verify = run_verify(task) if ok and task.get("verify_cmd") else None
         if verify:
             self.emit(tid, "verify", verify)
@@ -300,7 +413,7 @@ class Orchestrator:
         progress = 1.0 if status in ("done", "review") else task.get("progress") or 0
         self.db.update_task(tid, status=status, report=report, result_text=strip_report(text),
                             error=error if not ok else None, verify=verify, changed_files=changed_files,
-                            progress=progress, finished_at=time.time())
+                            diffstat=diffstat, progress=progress, finished_at=time.time())
         self.emit(tid, "finished", {"status": status})
         task = self.db.task(tid)
         lessons = self.learner.reflect(task)
@@ -308,6 +421,19 @@ class Orchestrator:
             self.emit(tid, "learned", {"lesson_ids": lessons})
         label = {"review": "ready for review", "needs_input": "needs your input"}.get(status, status)
         self.notify(f"Task #{tid} {label}", (report or {}).get("summary", error or "")[:300])
+
+    def _finish_reflection(self, task, ok, text, error):
+        tid = task["id"]
+        summary, n = self.coach.ingest(tid, text, task["workdir"]) if ok else (error or "failed", 0)
+        report = {"status": "done" if ok else "failed", "summary": summary, "output":
+                  [f"{n} proposal(s) waiting for your approval in the Brain tab"], "test_cases": []}
+        self.db.update_task(tid, status="review" if ok else "failed", report=report,
+                            result_text=strip_report(text), error=None if ok else error,
+                            progress=1.0 if ok else 0, finished_at=time.time())
+        self.emit(tid, "proposals", {"count": n})
+        if n:
+            self.notify("Reflection Coach", f"{n} improvement proposal(s) to review")
+        self.bus.publish({"type": "proposals"})
 
 
 def git_changes(workdir):
@@ -326,7 +452,7 @@ def git_changes(workdir):
 def run_verify(task):
     t0 = time.time()
     try:
-        p = subprocess.run(task["verify_cmd"], shell=True, cwd=task.get("workdir") or None,
+        p = subprocess.run(task["verify_cmd"], shell=True, cwd=task.get("exec_dir") or task.get("workdir") or None,
                            capture_output=True, text=True, timeout=900)
         out = (p.stdout + p.stderr)[-4000:]
         return {"cmd": task["verify_cmd"], "ok": p.returncode == 0, "code": p.returncode,

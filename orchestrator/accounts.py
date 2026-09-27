@@ -1,25 +1,10 @@
 """Claude account pool: picks an account that is enabled, not cooling down, and has a free slot."""
 import json
 import os
-import re
 import shutil
 import threading
 import time
 from pathlib import Path
-
-LIMIT_RE = re.compile(
-    r"usage limit reached|hit your limit|(5-hour|five-hour|weekly|session|opus) limit reached|"
-    r"out of extra usage|rate_limit_error|\b429\b|credit balance is too low", re.I)
-EPOCH_RE = re.compile(r"\|(\d{10})\b")
-
-
-def detect_limit(text):
-    """Return (is_limit, reset_epoch_or_None) for a CLI error message. Limit messages are short;
-    long text is the model's own prose (e.g. a task *about* rate limiting) and is ignored."""
-    if not text or len(text) > 600 or not LIMIT_RE.search(text):
-        return False, None
-    m = EPOCH_RE.search(text)
-    return True, (int(m.group(1)) if m else None)
 
 
 class AccountPool:
@@ -57,6 +42,18 @@ class AccountPool:
             out.append(a)
         return sorted(out, key=lambda a: ((self.utilization(a["name"]) or 0) >= threshold,
                                           a.get("priority", 9)))
+
+    def window_reset(self, name):
+        """When the account's exhausted usage window resets, from the latest rate-limit report."""
+        limits = self.state(name).get("limits") or {}
+        now = time.time()
+        full = [w.get("resetsAt") for w in (limits.get("unifiedWindows") or {}).values()
+                if (w.get("utilization") or 0) >= 0.99 and (w.get("resetsAt") or 0) > now]
+        if full:
+            return max(full)
+        if limits.get("status") not in (None, "allowed", "allowed_warning") and (limits.get("resetsAt") or 0) > now:
+            return limits["resetsAt"]
+        return None
 
     def record_limits(self, name, info):
         """Store a rate_limit_event; a non-'allowed' status puts the account on cooldown."""

@@ -176,6 +176,12 @@ th { color: var(--text-2); font-weight: 600; font-size: 12px; }
       <div id="lessons" style="margin-top:10px"></div>
     </div>
     <div class="card">
+      <h2>Reflection Coach — đề xuất cải tiến</h2>
+      <p class="small muted">Định kỳ (mặc định 7 ngày), Claude đọc lại các task gần đây, tìm lỗi lặp lại và đề xuất sửa CLAUDE.md hoặc thêm skill. Mỗi đề xuất kèm task làm bằng chứng. Không có gì được ghi xuống đĩa cho tới khi bạn duyệt; mọi thay đổi đều hoàn tác được.</p>
+      <div class="actions" style="margin-top:0;margin-bottom:10px"><button class="btn" id="coachRun">Chạy reflection ngay</button><span class="small muted" id="coachMsg"></span></div>
+      <div id="proposals"></div>
+    </div>
+    <div class="card">
       <h2>Đề xuất quyền (các tool bị chặn trong auto mode)</h2>
       <p class="small muted">Duyệt để thêm vào allowlist — lần sau Claude không bị chặn nữa.</p>
       <div id="perms"></div>
@@ -241,6 +247,7 @@ function renderTasks() {
       <div class="t">#${t.id} ${esc(t.title)}</div>
       <div>${badge(t.status)}</div>
       <div class="m">
+        ${t.kind === "reflection" ? `<span>🧠 Reflection</span>` : ""}${t.branch ? `<span>⎇ ${esc(t.branch)}${t.merged_at ? " ✓" : ""}</span>` : ""}
         <span>${t.agent ? (t.agent === "claude" ? "Claude" + (t.account ? " · " + esc(t.account) : "") : "Local · " + esc(t.model || "")) : "chưa phân công"}</span>
         ${t.category ? `<span>${esc(t.category)}</span>` : ""}
         ${t.todos && t.todos.length ? `<span>${t.todos.filter(x => x.status === "completed").length}/${t.todos.length} bước</span>` : ""}
@@ -325,13 +332,26 @@ function renderDetail(t) {
         <button class="btn ghost" onclick="retry(${t.id}, 'local')">Chạy lại bằng local</button>
       </div></div>` : ""}
 
+    ${t.branch ? `<div class="card"><h2>Nhánh làm việc (git worktree)</h2>
+      <dl class="kv"><dt>Nhánh</dt><dd><code>${esc(t.branch)}</code> → merge vào <code>${esc(t.base_branch)}</code></dd>
+        <dt>Thay đổi</dt><dd>${esc(t.diffstat || "chưa có")}</dd>
+        <dt>Thư mục</dt><dd class="small">${t.exec_dir ? esc(t.exec_dir) : "đã xoá"}</dd>
+        ${t.merged_at ? `<dt>Đã merge</dt><dd>${fmtT(t.merged_at)}</dd>` : ""}</dl>
+      <div class="actions">
+        ${t.exec_dir ? `<button class="btn ghost" onclick="showDiff(${t.id})">Xem diff</button>` : ""}
+        ${!t.merged_at && !["queued", "running"].includes(t.status) ? `<button class="btn good" onclick="mergeTask(${t.id})">Merge vào ${esc(t.base_branch)}</button>` : ""}
+        ${t.exec_dir && !["queued", "running"].includes(t.status) ? `<button class="btn ghost" onclick="discardTask(${t.id}, ${t.merged_at ? "true" : "false"})">${t.merged_at ? "Dọn worktree + nhánh" : "Xoá worktree (giữ nhánh)"}</button>` : ""}
+      </div><pre id="diffBox" class="hidden"></pre></div>` : ""}
+
+    ${t.status === "queued" && t.not_before && t.not_before * 1000 > Date.now() ? `<p class="small" style="color:var(--warn)">Nhà cung cấp đang quá tải — tự thử lại lúc ${new Date(t.not_before * 1000).toLocaleTimeString()} (lần ${t.retries}).</p>` : ""}
+
     ${["queued", "running"].includes(t.status) ? `<div class="actions" style="margin-bottom:14px"><button class="btn bad" onclick="cancelTask(${t.id})">Huỷ task</button></div>` : ""}
 
     <div class="card"><h2>Chi tiết</h2><dl class="kv">
       <dt>Agent</dt><dd>${esc(t.agent || "—")} ${t.account ? "· tài khoản " + esc(t.account) : ""} ${t.model ? "· " + esc(t.model) : ""}</dd>
       <dt>Loại / độ khó</dt><dd>${esc(t.category || "—")} / ${t.complexity || "—"}</dd>
       <dt>Workdir</dt><dd>${esc(t.workdir || "—")}</dd>
-      <dt>Token</dt><dd>${fmtN(t.input_tokens)} vào · ${fmtN(t.output_tokens)} ra</dd>
+      <dt>Token</dt><dd>${fmtN(t.input_tokens)} vào · ${fmtN(t.output_tokens)} ra${t.cached_tokens ? ` · ${fmtN(t.cached_tokens)} đọc từ cache` : ""}</dd>
       <dt>Quy đổi API</dt><dd>$${(t.cost_usd || 0).toFixed(4)} · ${t.num_turns || 0} lượt · ${dur(t.duration_ms)}</dd>
       <dt>Session</dt><dd class="small">${esc(t.session_id || "—")}</dd>
       <dt>Tạo / xong</dt><dd>${fmtT(t.created_at)} / ${fmtT(t.finished_at)}</dd>
@@ -359,6 +379,12 @@ function describe(e) {
     case "lessons": return `Áp dụng ${d.texts.length} bài học:\n- ` + d.texts.join("\n- ");
     case "verify": return `${d.ok ? "PASS" : "FAIL"} ${d.cmd}`;
     case "stalled": return `Không có hoạt động trong ${d.idle_sec}s`;
+    case "retry_later": return `Lỗi tạm thời từ nhà cung cấp, thử lại sau ${Math.round(d.in_sec)}s (lần ${d.attempt}): ${d.error}`;
+    case "session_reset": return `Không resume được session, chạy lại từ đầu: ${d.error}`;
+    case "account_login_required": return `Tài khoản ${d.account} bị đăng xuất — chạy: python -m orchestrator login ${d.account}`;
+    case "worktree": return `Làm việc trên nhánh ${d.branch} (tách khỏi ${d.base}) tại ${d.path}`;
+    case "merged": return `Đã merge ${d.branch} vào ${d.into} (${d.head})`;
+    case "proposals": return `Reflection Coach đưa ra ${d.count} đề xuất — xem tab Brain`;
     case "result": return `${d.ok ? "OK" : "Lỗi"} (${d.subtype}) · $${(d.cost_usd || 0).toFixed(4)} · ${d.turns} lượt`;
     default: return JSON.stringify(d);
   }
@@ -402,7 +428,8 @@ async function loadStats() {
   const now = Date.now() / 1000;
   $("#accounts").innerHTML = stats.accounts.map(a => {
     const cool = a.cooldown_until > now;
-    const st = !a.enabled ? `<span class="badge s-cancelled">Tắt</span>` : cool ? `<span class="badge s-review">⏸ Nghỉ tới ${new Date(a.cooldown_until * 1000).toLocaleTimeString()}</span>`
+    const parked = cool && (a.last_error || "").startsWith("login required");
+    const st = !a.enabled ? `<span class="badge s-cancelled">Tắt</span>` : parked ? `<span class="badge s-failed">✕ Cần đăng nhập lại</span>` : cool ? `<span class="badge s-review">⏸ Nghỉ tới ${new Date(a.cooldown_until * 1000).toLocaleTimeString()}</span>`
       : a.running ? `<span class="badge s-running">▶ Đang chạy ${a.running}/${a.max_parallel}</span>` : `<span class="badge s-done">✓ Sẵn sàng</span>`;
     return `<div class="acc"><div class="name">${esc(a.name)} ${st}</div>
       <div class="small muted">ưu tiên ${a.priority} · ${esc(a.config_dir)}</div>
@@ -465,15 +492,57 @@ function drawChart(rows) {
 
 // ---------- brain ----------
 async function loadBrain() {
+  loadProposals();
   const [lessons, perms] = await Promise.all([api("/api/lessons"), api("/api/permissions")]);
   $("#lessons").innerHTML = lessons.length ? lessons.map(l => `<div class="lesson ${l.pending ? "pending" : l.enabled ? "" : "off"}">
     <div class="txt">${l.pending ? `<span class="badge s-review">◎ Chờ duyệt</span> ` : ""}${esc(l.text)}<div class="small muted">${esc(l.scope)} · điểm ${l.score.toFixed(1)} · dùng ${l.uses} lần${l.source_task ? " · từ task #" + l.source_task : ""}</div></div>
     ${l.pending ? `<button class="btn good" onclick="lesson(${l.id}, {approve: 1})">Duyệt</button>`
       : `<button class="btn ghost" onclick="lesson(${l.id}, {enabled: ${l.enabled ? 0 : 1}})">${l.enabled ? "Tắt" : "Bật"}</button>`}
-    <button class="btn ghost" onclick="lesson(${l.id}, {delete: 1})">Xoá</button></div>`).join("") : `<div class="empty">Chưa có bài học. Hệ thống sẽ tự rút ra sau mỗi task.</div>`;
+    <button class="btn ghost" onclick="lesson(${l.id}, {delete: 1})">Xoá</button></div>`).join("") : `<div class="empty">Chưa có bài học. Nhận xét khi bạn từ chối kết quả, và các lệnh verify thất bại, sẽ thành bài học.</div>`;
   $("#perms").innerHTML = perms.length ? `<table><tr><th>Quy tắc</th><th>Bị chặn</th><th>Trạng thái</th><th></th></tr>${perms.map(p => `<tr><td><code>${esc(p.rule)}</code></td><td>${p.count} lần</td><td>${esc(p.status)}</td>
     <td>${p.status === "pending" ? `<button class="btn good" onclick="perm(${p.id}, true)">Cho phép</button> <button class="btn ghost" onclick="perm(${p.id}, false)">Bỏ qua</button>` : ""}</td></tr>`).join("")}</table>` : `<div class="empty">Chưa có tool nào bị chặn.</div>`;
 }
+async function showDiff(id) {
+  const box = $("#diffBox"); const r = await api(`/api/tasks/${id}/diff`);
+  box.textContent = r.diff || r.error || "(trống)"; box.classList.remove("hidden");
+}
+async function mergeTask(id) {
+  const r = await api(`/api/tasks/${id}/merge`, {});
+  if (r.error) alert("Không merge được: " + r.error); refreshDetail(); loadTasks();
+}
+async function discardTask(id, deleteBranch) {
+  if (!confirm(deleteBranch ? "Xoá worktree và nhánh đã merge?" : "Xoá thư mục worktree? Nhánh vẫn được giữ.")) return;
+  const r = await api(`/api/tasks/${id}/discard`, { delete_branch: deleteBranch });
+  if (r.error) alert(r.error); refreshDetail(); loadTasks();
+}
+const PSTATUS = { pending: ["s-review", "◎ Chờ duyệt"], applied: ["s-done", "✓ Đã áp dụng"], rejected: ["s-cancelled", "✕ Đã từ chối"],
+  rolled_back: ["s-queued", "↺ Đã hoàn tác"], invalid: ["s-failed", "✕ Không hợp lệ"] };
+async function loadProposals() {
+  const ps = await api("/api/proposals");
+  $("#proposals").innerHTML = ps.length ? ps.map(p => {
+    const [cls, label] = PSTATUS[p.status] || ["s-queued", p.status];
+    const where = p.kind === "skill" ? "Skill" : "CLAUDE.md";
+    return `<div class="tc">
+      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><b>${esc(p.title)}</b><span class="badge ${cls}">${label}</span></div>
+      <div class="small muted">${where} · ${esc(p.action || "")} · <code>${esc(p.target_path || p.target || "")}</code></div>
+      <p style="margin:6px 0">${esc(p.rationale || "")}</p>
+      <div class="small">Bằng chứng: ${(p.evidence || []).map(i => `<a href="#" onclick="openTask(${+i});return false">#${+i}</a>`).join(", ") || "—"}</div>
+      ${p.error ? `<div class="small" style="color:var(--bad)">${esc(p.error)}</div>` : ""}
+      <details ${p.status === "pending" ? "open" : ""}><summary class="small">Nội dung sẽ ${p.kind === "skill" ? "ghi vào skill" : "thêm vào cuối CLAUDE.md"}</summary><pre>${esc(p.content || "")}</pre></details>
+      <div class="actions">
+        ${p.status === "pending" ? `<button class="btn good" onclick="proposal(${p.id}, 'apply')">Duyệt & áp dụng</button><button class="btn ghost" onclick="proposal(${p.id}, 'reject')">Từ chối</button>` : ""}
+        ${p.status === "applied" ? `<button class="btn ghost" onclick="proposal(${p.id}, 'rollback')">Hoàn tác</button>` : ""}
+      </div></div>`;
+  }).join("") : `<div class="empty">Chưa có đề xuất nào.</div>`;
+}
+async function proposal(id, action) {
+  const r = await api("/api/proposals/" + id, { action });
+  if (r.error) alert(r.error); loadProposals();
+}
+$("#coachRun").onclick = async () => {
+  const r = await api("/api/coach/run", {});
+  $("#coachMsg").textContent = r.id ? `Đã tạo task #${r.id} — đề xuất sẽ hiện ở đây khi xong.` : r.error; loadTasks();
+};
 async function lesson(id, body) { await api("/api/lessons/" + id, body); loadBrain(); }
 async function perm(id, approve) { await api("/api/permissions/" + id, { approve }); loadBrain(); }
 $("#lAdd").onclick = async () => { const text = $("#lText").value.trim(); if (!text) return; await api("/api/lessons", { text, scope: $("#lScope").value.trim() || "global" }); $("#lText").value = ""; loadBrain(); };
@@ -488,6 +557,7 @@ function connect() {
     const msg = JSON.parse(m.data);
     if (msg.type === "event") appendEvent(msg.event);
     if (msg.type === "stats" && !$("#tab-usage").classList.contains("hidden")) loadStats();
+    if (msg.type === "proposals" && !$("#tab-brain").classList.contains("hidden")) loadProposals();
     if (msg.type === "task") {
       const i = tasks.findIndex(t => t.id === msg.task.id);
       if (i >= 0) tasks[i] = msg.task; else tasks.unshift(msg.task);

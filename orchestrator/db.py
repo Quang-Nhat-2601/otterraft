@@ -19,7 +19,13 @@ CREATE TABLE IF NOT EXISTS tasks (
     cost_usd REAL DEFAULT 0, input_tokens INTEGER DEFAULT 0, output_tokens INTEGER DEFAULT 0,
     duration_ms INTEGER DEFAULT 0, num_turns INTEGER DEFAULT 0, attempts INTEGER DEFAULT 0,
     pending_message TEXT, feedback TEXT, rating INTEGER,
-    last_event_at REAL, created_at REAL, started_at REAL, finished_at REAL
+    last_event_at REAL, created_at REAL, started_at REAL, finished_at REAL,
+    kind TEXT DEFAULT 'task',             -- task | reflection
+    cached_tokens INTEGER DEFAULT 0,
+    not_before REAL,                      -- transient failure: wait until then
+    retries INTEGER DEFAULT 0, session_resets INTEGER DEFAULT 0,
+    exec_dir TEXT,                        -- where the agent runs (a git worktree, or workdir)
+    branch TEXT, base_repo TEXT, base_ref TEXT, base_branch TEXT, diffstat TEXT, merged_at REAL
 );
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -30,7 +36,7 @@ CREATE TABLE IF NOT EXISTS usage (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts REAL, task_id INTEGER, kind TEXT, name TEXT, model TEXT,
     cost_usd REAL, input_tokens INTEGER, output_tokens INTEGER, duration_ms INTEGER,
-    ok INTEGER, category TEXT
+    ok INTEGER, category TEXT, cached_tokens INTEGER DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS account_state (
     name TEXT PRIMARY KEY, cooldown_until REAL DEFAULT 0, last_error TEXT,
@@ -43,6 +49,14 @@ CREATE TABLE IF NOT EXISTS lessons (
     score REAL DEFAULT 1, uses INTEGER DEFAULT 0, enabled INTEGER DEFAULT 1, created_at REAL,
     pending INTEGER DEFAULT 0   -- 1 = written by a model, waiting for the user's approval
 );
+CREATE TABLE IF NOT EXISTS proposals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER, title TEXT, target TEXT, target_path TEXT,
+    kind TEXT,                  -- claude_md | skill
+    action TEXT, rationale TEXT, evidence TEXT, content TEXT,
+    status TEXT,                -- pending | applied | rejected | rolled_back | invalid
+    error TEXT, backup_path TEXT, created_at REAL, applied_at REAL
+);
 CREATE TABLE IF NOT EXISTS permission_suggestions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     rule TEXT UNIQUE, count INTEGER DEFAULT 1, status TEXT DEFAULT 'pending', last_task INTEGER
@@ -51,9 +65,14 @@ CREATE TABLE IF NOT EXISTS permission_suggestions (
 
 # Columns added after the first release, for databases created by an older version.
 MIGRATIONS = [("account_state", "limits TEXT"), ("account_state", "limits_at REAL"),
-              ("lessons", "pending INTEGER DEFAULT 0")]
+              ("lessons", "pending INTEGER DEFAULT 0"), ("tasks", "kind TEXT DEFAULT 'task'"),
+              ("tasks", "cached_tokens INTEGER DEFAULT 0"), ("tasks", "not_before REAL"),
+              ("tasks", "retries INTEGER DEFAULT 0"), ("tasks", "session_resets INTEGER DEFAULT 0"),
+              ("tasks", "exec_dir TEXT"), ("tasks", "branch TEXT"), ("tasks", "base_repo TEXT"),
+              ("tasks", "base_ref TEXT"), ("tasks", "base_branch TEXT"), ("tasks", "diffstat TEXT"),
+              ("tasks", "merged_at REAL"), ("usage", "cached_tokens INTEGER DEFAULT 0")]
 
-JSON_FIELDS = {"todos", "report", "verify", "changed_files", "data", "tags", "limits"}
+JSON_FIELDS = {"todos", "report", "verify", "changed_files", "data", "tags", "limits", "evidence"}
 
 
 class DB:

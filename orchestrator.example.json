@@ -3,8 +3,18 @@
   "port": 8787,
   "auth_token": "",
   "accounts": [
-    {"name": "personal", "config_dir": "~/.claude-personal", "priority": 1, "max_parallel": 1},
-    {"name": "work", "config_dir": "~/.claude-work", "priority": 2, "max_parallel": 1}
+    {
+      "name": "personal",
+      "config_dir": "~/.claude-personal",
+      "priority": 1,
+      "max_parallel": 1
+    },
+    {
+      "name": "work",
+      "config_dir": "~/.claude-work",
+      "priority": 2,
+      "max_parallel": 1
+    }
   ],
   "claude": {
     "permission_mode": "auto",
@@ -16,9 +26,26 @@
     "enabled": true,
     "ollama_url": "http://127.0.0.1:11434",
     "models": [
-      {"name": "qwen2.5-coder:7b", "roles": ["simple", "router", "reflect"]}
+      {
+        "name": "gpt-oss:20b",
+        "roles": [
+          "simple",
+          "router"
+        ],
+        "think": "low"
+      }
     ]
   },
-  "notify": {"ntfy_url": ""},
-  "auto_accept": false
+  "notify": {
+    "ntfy_url": ""
+  },
+  "auto_accept": false,
+  "workspace": {
+    "use_worktrees": true,
+    "setup_cmd": ""
+  },
+  "learning": {
+    "coach_every_days": 7,
+    "coach_min_tasks": 5
+  }
 }
