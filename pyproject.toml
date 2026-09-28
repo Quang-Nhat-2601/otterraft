@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "otterraft"
+version = "0.1.0"
+description = "Run Claude Code across your accounts, unattended: auto account switching, a live dashboard, git worktrees and a self-improving coach."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+keywords = ["claude-code", "ai-agents", "orchestrator", "dashboard", "llm"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Environment :: Web Environment",
+    "Topic :: Software Development",
+]
+
+[project.scripts]
+otterraft = "otterraft.__main__:main"
+
+[tool.setuptools]
+packages = ["otterraft", "otterraft.agents"]
+
+[tool.setuptools.package-data]
+otterraft = ["static/*.html", "example.json"]

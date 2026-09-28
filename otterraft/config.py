@@ -1,4 +1,4 @@
-"""Configuration loading. Everything lives in one JSON file (default: ./orchestrator.json)."""
+"""Configuration loading. Everything lives in one JSON file (default: ./otterraft.json)."""
 import copy
 import json
 import os
@@ -11,7 +11,7 @@ DEFAULTS = {
     # The API always requires a token (?token=... or "Authorization: Bearer ..."); when empty,
     # a random one is generated once and kept in <data_dir>/token.
     "auth_token": "",
-    "data_dir": "~/.ai-orchestrator",
+    "data_dir": "~/.otterraft",
     "claude_bin": "claude",
     # Skills, agents, commands, plugins, CLAUDE.md, settings.json and MCP servers from this
     # config dir are linked into every account's config dir, so all accounts behave the same.
@@ -97,11 +97,11 @@ DEFAULTS = {
         "auto_approve_llm_lessons": False,
     },
     "workspace": {
-        # Run each task in its own git worktree + branch (orch/task-<id>) when the workdir is a
+        # Run each task in its own git worktree + branch (otterraft/task-<id>) when the workdir is a
         # git repo. Tasks on the same repo then run in parallel and your checkout stays untouched
         # until you press "Merge".
         "use_worktrees": True,
-        "branch_prefix": "orch/task-",
+        "branch_prefix": "otterraft/task-",
         # Run once in each new worktree, e.g. "npm ci" or "uv sync", so tests can run there.
         "setup_cmd": "",
     },
@@ -124,7 +124,7 @@ def _merge(base, override):
 
 
 def load(path=None):
-    path = Path(path or os.environ.get("ORCH_CONFIG", "orchestrator.json"))
+    path = Path(path or os.environ.get("OTTERRAFT_CONFIG", "otterraft.json"))
     user = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
     cfg = _merge(DEFAULTS, user)
     cfg["_path"] = str(path)

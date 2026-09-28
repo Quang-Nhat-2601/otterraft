@@ -1,4 +1,4 @@
-"""CLI: python -m orchestrator {init,serve,add,accounts,login,doctor}"""
+"""CLI: otterraft {init,serve,add,accounts,login,doctor,bench} (or python -m otterraft ...)"""
 import argparse
 import json
 import os
@@ -13,11 +13,11 @@ from .accounts import sync_shared
 from .bus import Bus
 from .db import DB
 
-EXAMPLE = Path(__file__).resolve().parent.parent / "orchestrator.example.json"
+EXAMPLE = Path(__file__).resolve().parent / "example.json"
 
 
 def open_db(cfg):
-    return DB(Path(cfg["data_dir"]) / "orchestrator.db")
+    return DB(Path(cfg["data_dir"]) / "otterraft.db")
 
 
 def cmd_init(args, _cfg):
@@ -26,7 +26,7 @@ def cmd_init(args, _cfg):
         print(f"{dst} already exists")
         return
     shutil.copy(EXAMPLE, dst)
-    print(f"Wrote {dst}. Edit accounts/models, then run: python -m orchestrator login <account>")
+    print(f"Wrote {dst}. Edit accounts/models, then run: otterraft login <account>")
 
 
 def cmd_serve(args, cfg):
@@ -99,7 +99,7 @@ def cmd_doctor(args, cfg):
     for a in cfg["accounts"]:
         li = _logged_in(a)
         print(f"[{'ok' if li else '??'}] account {a['name']}: {a.get('config_dir') or '~/.claude'}"
-              + ("" if li else f"  -> run: python -m orchestrator login {a['name']}"))
+              + ("" if li else f"  -> run: otterraft login {a['name']}"))
     for line in sync_shared(cfg, dry_run=True):
         print(line)
     local = LocalLLM(cfg)
@@ -117,13 +117,14 @@ def cmd_doctor(args, cfg):
 
 
 BENCH_TEXT = (
-    "Ollama chạy model ngôn ngữ lớn ngay trên máy tính cá nhân. Trên máy không có GPU, tốc độ sinh "
-    "token phụ thuộc chủ yếu vào băng thông RAM chứ không phải số nhân CPU, vì với mỗi token model "
-    "phải đọc toàn bộ trọng số đang hoạt động từ bộ nhớ. Vì vậy các model Mixture-of-Experts, vốn chỉ "
-    "kích hoạt vài tỷ tham số cho mỗi token, thường nhanh hơn nhiều so với model dense cùng kích thước "
-    "trên đĩa. Tuy nhiên chúng vẫn cần đủ RAM để chứa toàn bộ trọng số, và nếu hệ điều hành phải dùng "
-    "swap thì tốc độ sẽ giảm rất mạnh. Khi chọn model, hãy để dư ít nhất vài GB RAM cho hệ điều hành, "
-    "trình duyệt và các công cụ lập trình đang chạy song song.")
+    "Ollama runs large language models directly on a personal computer. On a machine without a GPU, "
+    "generation speed depends mostly on memory bandwidth rather than on the number of CPU cores, "
+    "because for every token the model has to read all of its active weights from RAM. That is why "
+    "Mixture-of-Experts models, which activate only a few billion parameters per token, are usually "
+    "much faster than dense models of the same size on disk. They still need enough RAM to hold all "
+    "of their weights, and once the operating system starts swapping, speed collapses. When picking "
+    "a model, leave at least a few gigabytes free for the operating system, the browser and the "
+    "developer tools running alongside it.")
 BENCH_DIFF = """--- a/app/auth.py
 +++ b/app/auth.py
 @@ def login(email, password):
@@ -135,7 +136,7 @@ BENCH_DIFF = """--- a/app/auth.py
 
 
 def cmd_bench(args, cfg):
-    """Time each local model on the kinds of work the orchestrator gives it."""
+    """Time each local model on the kinds of work OtterRaft gives it."""
     from .agents.local import LocalLLM
     from .router import CLASSIFIER_SYSTEM
     local = LocalLLM(cfg)
@@ -162,8 +163,8 @@ def cmd_bench(args, cfg):
             if ram and sizes[name] > 0.6 * ram else ""
         print(f"{name} ({gb(sizes[name])} on disk){warn}")
         tests = [
-            ("router", CLASSIFIER_SYSTEM, "Sửa test đăng nhập đang fail trong src/auth.py và thêm test cho email có dấu cách", True),
-            ("summarize", "Summarize in 3 bullet points, in Vietnamese.", BENCH_TEXT, False),
+            ("router", CLASSIFIER_SYSTEM, "Fix the failing login test in src/auth.py and add a test for emails with spaces", True),
+            ("summarize", "Summarize in 3 bullet points.", BENCH_TEXT, False),
             ("commit msg", "Write a conventional commit message for this diff. Output only the message.", BENCH_DIFF, False),
         ]
         r = {"model": name, "size": sizes[name]}
@@ -201,8 +202,8 @@ def cmd_bench(args, cfg):
 
 
 def main():
-    ap = argparse.ArgumentParser(prog="orchestrator")
-    ap.add_argument("--config", default=os.environ.get("ORCH_CONFIG", "orchestrator.json"))
+    ap = argparse.ArgumentParser(prog="otterraft", description="OtterRaft: your AI agents hold hands, so no task drifts away.")
+    ap.add_argument("--config", default=os.environ.get("OTTERRAFT_CONFIG", "otterraft.json"))
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("init", help="write an example config")
     sub.add_parser("serve", help="run scheduler + dashboard")

@@ -1,7 +1,8 @@
 """The "brain": decides which agent gets a task, and learns from outcomes via success stats."""
 import re
 
-# Keyword heuristics (English + Vietnamese). Used when no local classifier is available.
+# Keyword rules, the last fallback when neither Claude nor a local model can classify a task.
+# They match English and Vietnamese on purpose: users write tasks in their own language.
 CATEGORY_RULES = [
     ("commit_message", r"commit message|viết commit|message commit"),
     ("translate", r"translate|dịch( sang| qua)?\b"),
@@ -18,7 +19,7 @@ CATEGORY_RULES = [
 ]
 REPO_HINTS = r"repo|codebase|file|folder|thư mục|project|dự án|module|\.py\b|\.ts\b|\.js\b|src/"
 
-CLASSIFIER_SYSTEM = """You are the dispatcher of an AI task orchestrator. Classify the task you are given.
+CLASSIFIER_SYSTEM = """You are the dispatcher of OtterRaft, an AI task orchestrator. Classify the task you are given.
 Reply with one JSON object and nothing else:
 {"category": one of [summarize, translate, explain, commit_message, docs, classify, regex, snippet,
 chat, bugfix, refactor, test, feature, devops, research, other],

@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="vi">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AI Orchestrator</title>
+<title>OtterRaft</title>
 <style>
 :root {
   color-scheme: light;
@@ -123,7 +123,7 @@ th { color: var(--text-2); font-weight: 600; font-size: 12px; }
 </head>
 <body>
 <header>
-  <h1>AI Orchestrator</h1>
+  <h1><span aria-hidden="true">🦦</span> OtterRaft</h1>
   <nav>
     <button data-tab="tasks" class="on">Tasks</button>
     <button data-tab="usage">Usage</button>
@@ -136,15 +136,15 @@ th { color: var(--text-2); font-weight: 600; font-size: 12px; }
   <section id="tab-tasks">
     <div class="kpis" id="kpis"></div>
     <div class="card">
-      <h2>Giao task mới</h2>
-      <textarea id="fPrompt" placeholder="Mô tả việc cần làm… (vd: Sửa bug login trả 500 khi email có dấu cách, thêm test)"></textarea>
+      <h2>New task</h2>
+      <textarea id="fPrompt" placeholder="Describe the task… (e.g. Fix the login 500 when the email has spaces, and add a test)"></textarea>
       <div class="row">
-        <div><label>Thư mục dự án (workdir)</label><input id="fWorkdir" placeholder="/home/you/projects/app"></div>
-        <div><label>Giao cho</label>
-          <select id="fAgent"><option value="auto">Tự chọn (Claude điều phối)</option><option value="claude">Claude agent (sửa code, chạy lệnh)</option><option value="quick">Claude trả lời nhanh (chỉ văn bản)</option><option value="local">AI local</option></select></div>
-        <div><label>Lệnh verify (tuỳ chọn)</label><input id="fVerify" placeholder="pytest -q"></div>
+        <div><label>Project folder (workdir)</label><input id="fWorkdir" placeholder="/home/you/projects/app"></div>
+        <div><label>Assign to</label>
+          <select id="fAgent"><option value="auto">Auto (Claude dispatches)</option><option value="claude">Claude agent (edits code, runs commands)</option><option value="quick">Claude quick answer (text only)</option><option value="local">Local model</option></select></div>
+        <div><label>Verify command (optional)</label><input id="fVerify" placeholder="pytest -q"></div>
       </div>
-      <div class="actions"><button class="btn" id="fSubmit">Giao việc</button><span class="small muted" id="fMsg"></span></div>
+      <div class="actions"><button class="btn" id="fSubmit">Start task</button><span class="small muted" id="fMsg"></span></div>
     </div>
     <div class="card">
       <h2>Tasks</h2>
@@ -154,36 +154,36 @@ th { color: var(--text-2); font-weight: 600; font-size: 12px; }
   </section>
 
   <section id="tab-usage" class="hidden">
-    <div class="card"><h2>Tài khoản Claude</h2><div class="grid2" id="accounts"></div></div>
-    <div class="card"><h2>AI local</h2><div id="locals"></div></div>
-    <div class="card"><h2>Token theo ngày (14 ngày)</h2>
+    <div class="card"><h2>Claude accounts</h2><div class="grid2" id="accounts"></div></div>
+    <div class="card"><h2>Local models</h2><div id="locals"></div></div>
+    <div class="card"><h2>Tokens per day (last 14 days)</h2>
       <div class="legend"><span><i style="background:var(--series-1)"></i>Claude</span><span><i style="background:var(--series-2)"></i>Local</span></div>
       <div id="chart"></div>
-      <details class="small"><summary>Xem dạng bảng</summary><div class="table-wrap" id="chartTable"></div></details>
+      <details class="small"><summary>Show as table</summary><div class="table-wrap" id="chartTable"></div></details>
     </div>
-    <div class="card"><h2>Tỉ lệ thành công theo loại việc</h2><div class="table-wrap" id="byCat"></div></div>
+    <div class="card"><h2>Success rate by task type</h2><div class="table-wrap" id="byCat"></div></div>
   </section>
 
   <section id="tab-brain" class="hidden">
     <div class="card">
-      <h2>Bài học đã học (được chèn vào prompt các task sau)</h2>
-      <p class="small muted">Bài học do AI tự rút ra phải được bạn duyệt trước khi dùng, để một bài học sai (hoặc bị cài cắm từ nội dung trong repo) không lái mọi task sau.</p>
+      <h2>Lessons (added to the prompts of later tasks)</h2>
+      <p class="small muted">Lessons an AI wrote wait for your approval, so a wrong lesson (or one planted by content in a repo) cannot steer every later task.</p>
       <div class="row" style="grid-template-columns: 3fr 1fr auto; align-items:end">
-        <div><label>Thêm bài học thủ công</label><input id="lText" placeholder="vd: Dự án này dùng pnpm, không dùng npm"></div>
-        <div><label>Phạm vi</label><input id="lScope" placeholder="global hoặc /path/dự-án"></div>
-        <div><button class="btn" id="lAdd">Thêm</button></div>
+        <div><label>Add a lesson</label><input id="lText" placeholder="e.g. This project uses pnpm, not npm"></div>
+        <div><label>Scope</label><input id="lScope" placeholder="global or /path/to/project"></div>
+        <div><button class="btn" id="lAdd">Add</button></div>
       </div>
       <div id="lessons" style="margin-top:10px"></div>
     </div>
     <div class="card">
-      <h2>Reflection Coach — đề xuất cải tiến</h2>
-      <p class="small muted">Định kỳ (mặc định 7 ngày), Claude đọc lại các task gần đây, tìm lỗi lặp lại và đề xuất sửa CLAUDE.md hoặc thêm skill. Mỗi đề xuất kèm task làm bằng chứng. Không có gì được ghi xuống đĩa cho tới khi bạn duyệt; mọi thay đổi đều hoàn tác được.</p>
-      <div class="actions" style="margin-top:0;margin-bottom:10px"><button class="btn" id="coachRun">Chạy reflection ngay</button><span class="small muted" id="coachMsg"></span></div>
+      <h2>Reflection Coach: improvement proposals</h2>
+      <p class="small muted">Every few days (7 by default), Claude reads recent tasks, finds problems that repeat, and proposes a CLAUDE.md addition or a skill. Each proposal cites the tasks that justify it. Nothing is written to disk until you approve it, and every change can be rolled back.</p>
+      <div class="actions" style="margin-top:0;margin-bottom:10px"><button class="btn" id="coachRun">Run reflection now</button><span class="small muted" id="coachMsg"></span></div>
       <div id="proposals"></div>
     </div>
     <div class="card">
-      <h2>Đề xuất quyền (các tool bị chặn trong auto mode)</h2>
-      <p class="small muted">Duyệt để thêm vào allowlist — lần sau Claude không bị chặn nữa.</p>
+      <h2>Permission suggestions (tools blocked in auto mode)</h2>
+      <p class="small muted">Allow a rule to add it to the allowlist, so Claude is not blocked on it again.</p>
       <div id="perms"></div>
     </div>
   </section>
@@ -195,9 +195,9 @@ th { color: var(--text-2); font-weight: 600; font-size: 12px; }
 <script>
 const TOKEN = (() => {
   let t = new URLSearchParams(location.search).get("token");
-  try { if (t) localStorage.setItem("orch.token", t); else t = localStorage.getItem("orch.token"); } catch (e) {}
-  if (!t) t = prompt("Nhập token của orchestrator (in ra khi chạy `serve`):") || "";
-  try { localStorage.setItem("orch.token", t); } catch (e) {}
+  try { if (t) localStorage.setItem("otterraft.token", t); else t = localStorage.getItem("otterraft.token"); } catch (e) {}
+  if (!t) t = prompt("OtterRaft token (printed by `otterraft serve`):") || "";
+  try { localStorage.setItem("otterraft.token", t); } catch (e) {}
   if (new URLSearchParams(location.search).has("token")) history.replaceState(null, "", location.pathname);
   return t;
 })();
@@ -205,7 +205,7 @@ const H = TOKEN ? { Authorization: "Bearer " + TOKEN } : {};
 const api = (p, body) => fetch(p, body === undefined ? { headers: H } :
   { method: "POST", headers: { ...H, "Content-Type": "application/json" }, body: JSON.stringify(body) })
   .then(r => {
-    if (r.status === 401) { try { localStorage.removeItem("orch.token"); } catch (e) {} $("#liveTxt").textContent = "sai token — tải lại trang"; }
+    if (r.status === 401) { try { localStorage.removeItem("otterraft.token"); } catch (e) {} $("#liveTxt").textContent = "wrong token, reload the page"; }
     return r.json();
   });
 const $ = s => document.querySelector(s);
@@ -214,7 +214,7 @@ const fmtN = n => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).t
 const fmtT = ts => ts ? new Date(ts * 1000).toLocaleString() : "—";
 const ago = ts => { if (!ts) return ""; const s = Date.now() / 1000 - ts; return s < 60 ? Math.round(s) + "s" : s < 3600 ? Math.round(s / 60) + "m" : s < 86400 ? Math.round(s / 3600) + "h" : Math.round(s / 86400) + "d"; };
 const dur = ms => !ms ? "—" : ms < 60000 ? (ms / 1000).toFixed(0) + "s" : (ms / 60000).toFixed(1) + "m";
-const STATUS = { queued: "Chờ", running: "Đang chạy", needs_input: "Cần bạn trả lời", review: "Chờ duyệt", done: "Xong", failed: "Lỗi", cancelled: "Huỷ" };
+const STATUS = { queued: "Queued", running: "Running", needs_input: "Needs your answer", review: "Ready for review", done: "Done", failed: "Failed", cancelled: "Cancelled" };
 const ICON = { queued: "○", running: "▶", needs_input: "?", review: "◎", done: "✓", failed: "✕", cancelled: "✕" };
 const badge = s => `<span class="badge s-${s}">${ICON[s] || ""} ${STATUS[s] || s}</span>`;
 
@@ -232,11 +232,11 @@ document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
 async function loadTasks() { tasks = await api("/api/tasks"); renderTasks(); }
 function renderTasks() {
   const counts = tasks.reduce((a, t) => (a[t.status] = (a[t.status] || 0) + 1, a), {});
-  const k = [["Đang chạy", counts.running || 0], ["Chờ", counts.queued || 0],
-    ["Cần bạn", (counts.needs_input || 0) + (counts.review || 0)], ["Xong", counts.done || 0], ["Lỗi", counts.failed || 0],
-    ["Chi phí quy đổi API", "$" + tasks.reduce((a, t) => a + (t.cost_usd || 0), 0).toFixed(2)]];
+  const k = [["Running", counts.running || 0], ["Queued", counts.queued || 0],
+    ["Need you", (counts.needs_input || 0) + (counts.review || 0)], ["Done", counts.done || 0], ["Failed", counts.failed || 0],
+    ["API-equivalent cost", "$" + tasks.reduce((a, t) => a + (t.cost_usd || 0), 0).toFixed(2)]];
   $("#kpis").innerHTML = k.map(([l, v]) => `<div class="kpi"><div class="v">${v}</div><div class="l">${l}</div></div>`).join("");
-  const fs = [["all", "Tất cả"], ["active", "Đang làm"], ["attention", "Cần bạn"], ["done", "Xong"], ["failed", "Lỗi"]];
+  const fs = [["all", "All"], ["active", "Active"], ["attention", "Need you"], ["done", "Done"], ["failed", "Failed"]];
   $("#filters").innerHTML = fs.map(([v, l]) => `<button class="chip ${filter === v ? "on" : ""}" data-f="${v}">${l}</button>`).join("");
   document.querySelectorAll("[data-f]").forEach(b => b.onclick = () => { filter = b.dataset.f; renderTasks(); });
   const match = t => filter === "all" || (filter === "active" && ["queued", "running"].includes(t.status)) ||
@@ -250,13 +250,13 @@ function renderTasks() {
         ${t.kind === "reflection" ? `<span>🧠 Reflection</span>` : ""}${t.branch ? `<span>⎇ ${esc(t.branch)}${t.merged_at ? " ✓" : ""}</span>` : ""}
         <span>${agentLabel(t)}</span>
         ${t.category ? `<span>${esc(t.category)}</span>` : ""}
-        ${t.todos && t.todos.length ? `<span>${t.todos.filter(x => x.status === "completed").length}/${t.todos.length} bước</span>` : ""}
+        ${t.todos && t.todos.length ? `<span>${t.todos.filter(x => x.status === "completed").length}/${t.todos.length} steps</span>` : ""}
         <span>${dur(t.duration_ms)}</span>
         ${t.cost_usd ? `<span>$${t.cost_usd.toFixed(3)}</span>` : ""}
-        <span class="muted">${ago(t.created_at)} trước</span>
+        <span class="muted">${ago(t.created_at)} ago</span>
       </div>
       <div class="bar"><i style="width:${Math.round((t.progress || 0) * 100)}%"></i></div>
-    </div>`).join("") : `<div class="empty">Chưa có task nào.</div>`;
+    </div>`).join("") : `<div class="empty">No tasks yet.</div>`;
   document.querySelectorAll(".task").forEach(el => el.onclick = () => openTask(+el.dataset.id));
 }
 
@@ -266,13 +266,13 @@ $("#fSubmit").onclick = async () => {
   $("#fSubmit").disabled = true;
   try {
     const r = await api("/api/tasks", { prompt, workdir: $("#fWorkdir").value.trim(), agent_pref: $("#fAgent").value, verify_cmd: $("#fVerify").value.trim() });
-    $("#fMsg").textContent = r.id ? `Đã giao task #${r.id}` : r.error;
+    $("#fMsg").textContent = r.id ? `Started task #${r.id}` : r.error;
     $("#fPrompt").value = "";
-    try { localStorage.setItem("orch.workdir", $("#fWorkdir").value.trim()); localStorage.setItem("orch.verify", $("#fVerify").value.trim()); } catch (e) {}
+    try { localStorage.setItem("otterraft.workdir", $("#fWorkdir").value.trim()); localStorage.setItem("otterraft.verify", $("#fVerify").value.trim()); } catch (e) {}
     loadTasks();
   } finally { $("#fSubmit").disabled = false; }
 };
-try { $("#fWorkdir").value = localStorage.getItem("orch.workdir") || ""; $("#fVerify").value = localStorage.getItem("orch.verify") || ""; } catch (e) {}
+try { $("#fWorkdir").value = localStorage.getItem("otterraft.workdir") || ""; $("#fVerify").value = localStorage.getItem("otterraft.verify") || ""; } catch (e) {}
 
 // ---------- detail ----------
 async function openTask(id) {
@@ -289,88 +289,88 @@ function closeDetail() { $("#detail").classList.remove("open"); openId = null; }
 function renderDetail(t) {
   const r = t.report || {};
   const tcs = r.test_cases || [];
-  const saved = JSON.parse(safeGet("orch.tc." + t.id) || "{}");
+  const saved = JSON.parse(safeGet("otterraft.tc." + t.id) || "{}");
   $("#detailPanel").innerHTML = `
-    <button class="btn ghost close" onclick="closeDetail()">Đóng</button>
+    <button class="btn ghost close" onclick="closeDetail()">Close</button>
     <h2 style="margin:0 0 6px;font-size:18px">#${t.id} ${esc(t.title)}</h2>
     <div style="margin-bottom:12px">${badge(t.status)} <span class="small muted">${esc(t.route_reason || "")}</span></div>
     <div class="bar" style="height:6px;margin-bottom:14px"><i style="width:${Math.round((t.progress || 0) * 100)}%"></i></div>
 
-    ${t.status === "needs_input" ? `<div class="card" style="border-color:var(--warn)"><h2>AI đang hỏi bạn</h2>
+    ${t.status === "needs_input" ? `<div class="card" style="border-color:var(--warn)"><h2>The agent has a question</h2>
       ${(r.questions || []).map(q => `<p>• ${esc(q)}</p>`).join("") || `<p>${esc(r.summary || "")}</p>`}
-      <textarea id="replyTxt" placeholder="Trả lời để AI làm tiếp…"></textarea>
-      <div class="actions"><button class="btn" onclick="reply(${t.id})">Gửi & làm tiếp</button></div></div>` : ""}
+      <textarea id="replyTxt" placeholder="Answer so the agent can continue…"></textarea>
+      <div class="actions"><button class="btn" onclick="reply(${t.id})">Send and continue</button></div></div>` : ""}
 
-    ${t.todos && t.todos.length ? `<div class="card"><h2>Tiến độ</h2>${t.todos.map(x =>
+    ${t.todos && t.todos.length ? `<div class="card"><h2>Progress</h2>${t.todos.map(x =>
       `<div class="todo ${x.status}"><span>${x.status === "completed" ? "✓" : x.status === "in_progress" ? "▶" : "○"}</span><span>${esc(x.content)}</span></div>`).join("")}</div>` : ""}
 
-    ${t.report ? `<div class="card"><h2>Kết quả</h2>
+    ${t.report ? `<div class="card"><h2>Result</h2>
       <p>${esc(r.summary)}</p>
       <dl class="kv">
-        <dt>Input (AI hiểu là)</dt><dd>${esc(r.input || t.prompt)}</dd>
+        <dt>Input (as understood)</dt><dd>${esc(r.input || t.prompt)}</dd>
         <dt>Output</dt><dd>${(r.output || []).map(o => "• " + esc(typeof o === "string" ? o : JSON.stringify(o))).join("<br>") || "—"}</dd>
-        ${t.changed_files && t.changed_files.length ? `<dt>File thay đổi</dt><dd>${t.changed_files.map(esc).join("<br>")}</dd>` : ""}
-        ${r.notes ? `<dt>Ghi chú</dt><dd>${esc(r.notes)}</dd>` : ""}
+        ${t.changed_files && t.changed_files.length ? `<dt>Changed files</dt><dd>${t.changed_files.map(esc).join("<br>")}</dd>` : ""}
+        ${r.notes ? `<dt>Notes</dt><dd>${esc(r.notes)}</dd>` : ""}
       </dl></div>` : ""}
 
-    ${t.verify ? `<div class="card"><h2>Verify tự động</h2>
+    ${t.verify ? `<div class="card"><h2>Automatic verify</h2>
       <span class="badge ${t.verify.ok ? "s-done" : "s-failed"}">${t.verify.ok ? "✓ PASS" : "✕ FAIL"}</span>
       <code class="small">${esc(t.verify.cmd)}</code> <span class="small muted">${t.verify.sec}s</span>
       <pre>${esc(t.verify.output)}</pre></div>` : ""}
 
-    ${tcs.length ? `<div class="card"><h2>Test case bạn cần verify (${tcs.length})</h2>
+    ${tcs.length ? `<div class="card"><h2>Test cases for you to check (${tcs.length})</h2>
       ${tcs.map((c, i) => `<div class="tc"><label><input type="checkbox" data-tc="${i}" ${saved[i] ? "checked" : ""}> ${esc(c.title)}</label>
         ${(c.steps || []).length ? `<ol>${c.steps.map(s => `<li>${esc(s)}</li>`).join("")}</ol>` : ""}
-        ${c.expected ? `<div class="exp"><b>Kỳ vọng:</b> ${esc(c.expected)}</div>` : ""}</div>`).join("")}</div>` : ""}
+        ${c.expected ? `<div class="exp"><b>Expected:</b> ${esc(c.expected)}</div>` : ""}</div>`).join("")}</div>` : ""}
 
-    ${["review", "done", "failed"].includes(t.status) ? `<div class="card"><h2>Duyệt</h2>
-      <textarea id="fbTxt" placeholder="Nhận xét (bắt buộc khi từ chối — AI sẽ sửa theo và hệ thống học từ đây)">${esc(t.feedback || "")}</textarea>
+    ${["review", "done", "failed"].includes(t.status) ? `<div class="card"><h2>Review</h2>
+      <textarea id="fbTxt" placeholder="Feedback (required to reject: the agent fixes its work from it, and OtterRaft learns from it)">${esc(t.feedback || "")}</textarea>
       <div class="actions">
-        ${t.status !== "done" ? `<button class="btn good" onclick="review(${t.id}, true)">✓ Chấp nhận</button>` : ""}
-        <button class="btn bad" onclick="review(${t.id}, false)">✕ Từ chối & yêu cầu sửa</button>
-        <button class="btn ghost" onclick="retry(${t.id}, 'claude')">Chạy lại bằng Claude</button>
-        <button class="btn ghost" onclick="retry(${t.id}, 'local')">Chạy lại bằng local</button>
+        ${t.status !== "done" ? `<button class="btn good" onclick="review(${t.id}, true)">✓ Accept</button>` : ""}
+        <button class="btn bad" onclick="review(${t.id}, false)">✕ Reject and ask for a fix</button>
+        <button class="btn ghost" onclick="retry(${t.id}, 'claude')">Rerun with Claude agent</button>
+        <button class="btn ghost" onclick="retry(${t.id}, 'local')">Rerun with local model</button>
       </div></div>` : ""}
 
-    ${t.branch ? `<div class="card"><h2>Nhánh làm việc (git worktree)</h2>
-      <dl class="kv"><dt>Nhánh</dt><dd><code>${esc(t.branch)}</code> → merge vào <code>${esc(t.base_branch)}</code></dd>
-        <dt>Thay đổi</dt><dd>${esc(t.diffstat || "chưa có")}</dd>
-        <dt>Thư mục</dt><dd class="small">${t.exec_dir ? esc(t.exec_dir) : "đã xoá"}</dd>
-        ${t.merged_at ? `<dt>Đã merge</dt><dd>${fmtT(t.merged_at)}</dd>` : ""}</dl>
+    ${t.branch ? `<div class="card"><h2>Work branch (git worktree)</h2>
+      <dl class="kv"><dt>Branch</dt><dd><code>${esc(t.branch)}</code> → merges into <code>${esc(t.base_branch)}</code></dd>
+        <dt>Changes</dt><dd>${esc(t.diffstat || "none yet")}</dd>
+        <dt>Folder</dt><dd class="small">${t.exec_dir ? esc(t.exec_dir) : "removed"}</dd>
+        ${t.merged_at ? `<dt>Merged</dt><dd>${fmtT(t.merged_at)}</dd>` : ""}</dl>
       <div class="actions">
-        ${t.exec_dir ? `<button class="btn ghost" onclick="showDiff(${t.id})">Xem diff</button>` : ""}
-        ${!t.merged_at && !["queued", "running"].includes(t.status) ? `<button class="btn good" onclick="mergeTask(${t.id})">Merge vào ${esc(t.base_branch)}</button>` : ""}
-        ${t.exec_dir && !["queued", "running"].includes(t.status) ? `<button class="btn ghost" onclick="discardTask(${t.id}, ${t.merged_at ? "true" : "false"})">${t.merged_at ? "Dọn worktree + nhánh" : "Xoá worktree (giữ nhánh)"}</button>` : ""}
+        ${t.exec_dir ? `<button class="btn ghost" onclick="showDiff(${t.id})">Show diff</button>` : ""}
+        ${!t.merged_at && !["queued", "running"].includes(t.status) ? `<button class="btn good" onclick="mergeTask(${t.id})">Merge into ${esc(t.base_branch)}</button>` : ""}
+        ${t.exec_dir && !["queued", "running"].includes(t.status) ? `<button class="btn ghost" onclick="discardTask(${t.id}, ${t.merged_at ? "true" : "false"})">${t.merged_at ? "Remove worktree and branch" : "Remove worktree (keep branch)"}</button>` : ""}
       </div><pre id="diffBox" class="hidden"></pre></div>` : ""}
 
-    ${t.status === "queued" && t.not_before && t.not_before * 1000 > Date.now() ? `<p class="small" style="color:var(--warn)">Nhà cung cấp đang quá tải — tự thử lại lúc ${new Date(t.not_before * 1000).toLocaleTimeString()} (lần ${t.retries}).</p>` : ""}
+    ${t.status === "queued" && t.not_before && t.not_before * 1000 > Date.now() ? `<p class="small" style="color:var(--warn)">The provider is overloaded; retrying automatically at ${new Date(t.not_before * 1000).toLocaleTimeString()} (attempt ${t.retries}).</p>` : ""}
 
-    ${["queued", "running"].includes(t.status) ? `<div class="actions" style="margin-bottom:14px"><button class="btn bad" onclick="cancelTask(${t.id})">Huỷ task</button></div>` : ""}
+    ${["queued", "running"].includes(t.status) ? `<div class="actions" style="margin-bottom:14px"><button class="btn bad" onclick="cancelTask(${t.id})">Cancel task</button></div>` : ""}
 
-    <div class="card"><h2>Chi tiết</h2><dl class="kv">
-      <dt>Agent</dt><dd>${esc(t.agent || "—")} ${t.account ? "· tài khoản " + esc(t.account) : ""} ${t.model ? "· " + esc(t.model) : ""}</dd>
-      <dt>Loại / độ khó</dt><dd>${esc(t.category || "—")} / ${t.complexity || "—"}</dd>
+    <div class="card"><h2>Details</h2><dl class="kv">
+      <dt>Agent</dt><dd>${esc(t.agent || "—")} ${t.account ? "· account " + esc(t.account) : ""} ${t.model ? "· " + esc(t.model) : ""}</dd>
+      <dt>Type / complexity</dt><dd>${esc(t.category || "—")} / ${t.complexity || "—"}</dd>
       <dt>Workdir</dt><dd>${esc(t.workdir || "—")}</dd>
-      <dt>Token</dt><dd>${fmtN(t.input_tokens)} vào · ${fmtN(t.output_tokens)} ra${t.cached_tokens ? ` · ${fmtN(t.cached_tokens)} đọc từ cache` : ""}</dd>
-      <dt>Quy đổi API</dt><dd>$${(t.cost_usd || 0).toFixed(4)} · ${t.num_turns || 0} lượt · ${dur(t.duration_ms)}</dd>
+      <dt>Token</dt><dd>${fmtN(t.input_tokens)} in · ${fmtN(t.output_tokens)} out${t.cached_tokens ? ` · ${fmtN(t.cached_tokens)} read from cache` : ""}</dd>
+      <dt>API-equivalent</dt><dd>$${(t.cost_usd || 0).toFixed(4)} · ${t.num_turns || 0} turns · ${dur(t.duration_ms)}</dd>
       <dt>Session</dt><dd class="small">${esc(t.session_id || "—")}</dd>
-      <dt>Tạo / xong</dt><dd>${fmtT(t.created_at)} / ${fmtT(t.finished_at)}</dd>
-      ${t.error ? `<dt>Lỗi</dt><dd style="color:var(--bad)">${esc(t.error)}</dd>` : ""}
-    </dl><details style="margin-top:8px"><summary class="small">Prompt gốc</summary><pre>${esc(t.prompt)}</pre></details></div>
+      <dt>Created / finished</dt><dd>${fmtT(t.created_at)} / ${fmtT(t.finished_at)}</dd>
+      ${t.error ? `<dt>Error</dt><dd style="color:var(--bad)">${esc(t.error)}</dd>` : ""}
+    </dl><details style="margin-top:8px"><summary class="small">Original prompt</summary><pre>${esc(t.prompt)}</pre></details></div>
 
-    <div class="card"><h2>Hoạt động trực tiếp</h2><div class="log" id="log"></div></div>`;
+    <div class="card"><h2>Live activity</h2><div class="log" id="log"></div></div>`;
   document.querySelectorAll("[data-tc]").forEach(cb => cb.onchange = () => {
-    const s = JSON.parse(safeGet("orch.tc." + t.id) || "{}"); s[cb.dataset.tc] = cb.checked; safeSet("orch.tc." + t.id, JSON.stringify(s));
+    const s = JSON.parse(safeGet("otterraft.tc." + t.id) || "{}"); s[cb.dataset.tc] = cb.checked; safeSet("otterraft.tc." + t.id, JSON.stringify(s));
   });
 }
 function safeGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
 function safeSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
 
 function agentLabel(t) {
-  if (!t.agent) return "chưa phân công";
+  if (!t.agent) return "not assigned yet";
   const acc = t.account ? " · " + esc(t.account) : "";
   if (t.agent === "claude") return "Claude agent" + acc;
-  if (t.agent === "quick") return "Claude nhanh" + acc;
+  if (t.agent === "quick") return "Claude quick" + acc;
   return "Local · " + esc(t.model || "");
 }
 function describe(e) {
@@ -379,21 +379,21 @@ function describe(e) {
     case "tool": return `${d.name} ${d.input || ""}`;
     case "text": return d.text;
     case "todos": return d.todos.map(t => (t.status === "completed" ? "✓ " : t.status === "in_progress" ? "▶ " : "○ ") + t.content).join("\n");
-    case "routed": return `→ ${d.agent} (${d.category}, độ khó ${d.complexity}): ${d.reason}`;
-    case "start": return d.agent === "claude" ? `Claude agent trên tài khoản ${d.account}${d.resume ? " (tiếp tục session)" : ""}`
-      : d.agent === "quick" ? `Claude trả lời nhanh (${d.model}) trên tài khoản ${d.account}` : `Local model ${d.model}`;
-    case "account_limit": return `Tài khoản ${d.account} chạm giới hạn, nghỉ tới ${fmtT(d.until)} → chuyển tài khoản`;
-    case "handoff": return `Chuyển session: ${d.from} → ${d.to}`;
-    case "lessons": return `Áp dụng ${d.texts.length} bài học:\n- ` + d.texts.join("\n- ");
+    case "routed": return `→ ${d.agent} (${d.category}, complexity ${d.complexity}): ${d.reason}`;
+    case "start": return d.agent === "claude" ? `Claude agent on account ${d.account}${d.resume ? " (resuming the session)" : ""}`
+      : d.agent === "quick" ? `Claude quick answer (${d.model}) on account ${d.account}` : `Local model ${d.model}`;
+    case "account_limit": return `Account ${d.account} hit its limit and rests until ${fmtT(d.until)}; switching account`;
+    case "handoff": return `Session handed off: ${d.from} → ${d.to}`;
+    case "lessons": return `Using ${d.texts.length} lesson(s):\n- ` + d.texts.join("\n- ");
     case "verify": return `${d.ok ? "PASS" : "FAIL"} ${d.cmd}`;
-    case "stalled": return `Không có hoạt động trong ${d.idle_sec}s`;
-    case "retry_later": return `Lỗi tạm thời từ nhà cung cấp, thử lại sau ${Math.round(d.in_sec)}s (lần ${d.attempt}): ${d.error}`;
-    case "session_reset": return `Không resume được session, chạy lại từ đầu: ${d.error}`;
-    case "account_login_required": return `Tài khoản ${d.account} bị đăng xuất — chạy: python -m orchestrator login ${d.account}`;
-    case "worktree": return `Làm việc trên nhánh ${d.branch} (tách khỏi ${d.base}) tại ${d.path}`;
-    case "merged": return `Đã merge ${d.branch} vào ${d.into} (${d.head})`;
-    case "proposals": return `Reflection Coach đưa ra ${d.count} đề xuất — xem tab Brain`;
-    case "result": return `${d.ok ? "OK" : "Lỗi"} (${d.subtype}) · $${(d.cost_usd || 0).toFixed(4)} · ${d.turns} lượt`;
+    case "stalled": return `No activity for ${d.idle_sec}s`;
+    case "retry_later": return `Temporary provider error, retrying in ${Math.round(d.in_sec)}s (attempt ${d.attempt}): ${d.error}`;
+    case "session_reset": return `Could not resume the session, starting over: ${d.error}`;
+    case "account_login_required": return `Account ${d.account} is logged out; run: otterraft login ${d.account}`;
+    case "worktree": return `Working on branch ${d.branch} (from ${d.base}) in ${d.path}`;
+    case "merged": return `Merged ${d.branch} into ${d.into} (${d.head})`;
+    case "proposals": return `Reflection Coach made ${d.count} proposal(s); see the Brain tab`;
+    case "result": return `${d.ok ? "OK" : "Error"} (${d.subtype}) · $${(d.cost_usd || 0).toFixed(4)} · ${d.turns} turns`;
     default: return JSON.stringify(d);
   }
 }
@@ -424,7 +424,7 @@ async function refreshDetail() {
 async function reply(id) { await api(`/api/tasks/${id}/reply`, { message: $("#replyTxt").value }); refreshDetail(); loadTasks(); }
 async function review(id, accepted) {
   const feedback = $("#fbTxt").value.trim();
-  if (!accepted && !feedback) { $("#fbTxt").focus(); $("#fbTxt").placeholder = "Hãy ghi lý do từ chối để AI sửa và hệ thống học."; return; }
+  if (!accepted && !feedback) { $("#fbTxt").focus(); $("#fbTxt").placeholder = "Say why you reject it, so the agent can fix it and OtterRaft can learn."; return; }
   await api(`/api/tasks/${id}/review`, { accepted, feedback }); refreshDetail(); loadTasks();
 }
 async function retry(id, agent_pref) { await api(`/api/tasks/${id}/retry`, { agent_pref, reroute: true }); refreshDetail(); loadTasks(); }
@@ -437,39 +437,39 @@ async function loadStats() {
   $("#accounts").innerHTML = stats.accounts.map(a => {
     const cool = a.cooldown_until > now;
     const parked = cool && (a.last_error || "").startsWith("login required");
-    const st = !a.enabled ? `<span class="badge s-cancelled">Tắt</span>` : parked ? `<span class="badge s-failed">✕ Cần đăng nhập lại</span>` : cool ? `<span class="badge s-review">⏸ Nghỉ tới ${new Date(a.cooldown_until * 1000).toLocaleTimeString()}</span>`
-      : a.running ? `<span class="badge s-running">▶ Đang chạy ${a.running}/${a.max_parallel}</span>` : `<span class="badge s-done">✓ Sẵn sàng</span>`;
+    const st = !a.enabled ? `<span class="badge s-cancelled">Disabled</span>` : parked ? `<span class="badge s-failed">✕ Needs login</span>` : cool ? `<span class="badge s-review">⏸ Resting until ${new Date(a.cooldown_until * 1000).toLocaleTimeString()}</span>`
+      : a.running ? `<span class="badge s-running">▶ Running ${a.running}/${a.max_parallel}</span>` : `<span class="badge s-done">✓ Ready</span>`;
     return `<div class="acc"><div class="name">${esc(a.name)} ${st}</div>
-      <div class="small muted">ưu tiên ${a.priority} · ${esc(a.config_dir)}</div>
+      <div class="small muted">priority ${a.priority} · ${esc(a.config_dir)}</div>
       ${limitMeters(a)}
-      ${a.brain_week && a.brain_week.n ? `<div class="small muted" style="margin-top:8px">Điều phối 7 ngày: ${a.brain_week.n} lần · ${fmtN(a.brain_week.tokens)} token · TB ${dur(a.brain_week.dur)}/lần</div>` : ""}
-      <div class="small" style="margin-top:8px">5 giờ gần nhất (qua orchestrator): ${a.window_5h.n} lần chạy · $${a.window_5h.cost.toFixed(2)} · ${fmtN(a.window_5h.inp + a.window_5h.outp)} token</div>
-      <table><tr><th></th><th>Lần chạy</th><th>Thành công</th><th>Quy đổi API</th><th>TB thời gian</th></tr>
-        <tr><td>7 ngày</td><td>${a.week.n}</td><td>${a.week.n ? Math.round(a.week.ok * 100) + "%" : "—"}</td><td>$${a.week.cost.toFixed(2)}</td><td>${dur(a.week.dur)}</td></tr>
-        <tr><td>Tổng</td><td>${a.all.n}</td><td>${a.all.n ? Math.round(a.all.ok * 100) + "%" : "—"}</td><td>$${a.all.cost.toFixed(2)}</td><td>${dur(a.all.dur)}</td></tr></table>
+      ${a.brain_week && a.brain_week.n ? `<div class="small muted" style="margin-top:8px">Dispatching, last 7 days: ${a.brain_week.n} calls · ${fmtN(a.brain_week.tokens)} tokens · avg ${dur(a.brain_week.dur)} each</div>` : ""}
+      <div class="small" style="margin-top:8px">Last 5 hours (through OtterRaft): ${a.window_5h.n} runs · $${a.window_5h.cost.toFixed(2)} · ${fmtN(a.window_5h.inp + a.window_5h.outp)} tokens</div>
+      <table><tr><th></th><th>Runs</th><th>Success</th><th>API-equivalent</th><th>Avg time</th></tr>
+        <tr><td>7 days</td><td>${a.week.n}</td><td>${a.week.n ? Math.round(a.week.ok * 100) + "%" : "—"}</td><td>$${a.week.cost.toFixed(2)}</td><td>${dur(a.week.dur)}</td></tr>
+        <tr><td>All time</td><td>${a.all.n}</td><td>${a.all.n ? Math.round(a.all.ok * 100) + "%" : "—"}</td><td>$${a.all.cost.toFixed(2)}</td><td>${dur(a.all.dur)}</td></tr></table>
       ${cool && a.last_error ? `<div class="small" style="color:var(--warn);margin-top:6px">${esc(a.last_error.slice(0, 160))}</div>` : ""}
-      ${cool ? `<div class="actions"><button class="btn ghost" onclick="resetAcc('${esc(a.name)}')">Dùng lại ngay</button></div>` : ""}
+      ${cool ? `<div class="actions"><button class="btn ghost" onclick="resetAcc('${esc(a.name)}')">Use again now</button></div>` : ""}
     </div>`;
-  }).join("") || `<div class="empty">Chưa cấu hình tài khoản.</div>`;
-  $("#locals").innerHTML = !stats.local_enabled ? `<p class="small muted">AI local đang tắt: Claude (${esc(stats.brain.model)}) điều phối và trả lời các task văn bản. Bật bằng <code>local.enabled: true</code> nếu muốn giữ task đơn giản trên máy.</p>` : `<p class="small">${stats.local_server_up ? "✓ Local server đang chạy" : "✕ Không kết nối được local server (Ollama)"} · đã xử lý ${stats.local_saved.n} task thay Claude (${fmtN(stats.local_saved.tokens)} token)</p>
-    <div class="table-wrap"><table><tr><th>Model</th><th>Đã cài</th><th>Task</th><th>Thành công</th><th>Token</th><th>TB thời gian</th></tr>
+  }).join("") || `<div class="empty">No accounts configured.</div>`;
+  $("#locals").innerHTML = !stats.local_enabled ? `<p class="small muted">Local models are off: Claude (${esc(stats.brain.model)}) dispatches tasks and answers the text-only ones. Set <code>local.enabled: true</code> to keep simple tasks on this machine.</p>` : `<p class="small">${stats.local_server_up ? "✓ Local server is running" : "✕ Cannot reach the local server (Ollama)"} · handled ${stats.local_saved.n} task(s) instead of Claude (${fmtN(stats.local_saved.tokens)} tokens)</p>
+    <div class="table-wrap"><table><tr><th>Model</th><th>Installed</th><th>Tasks</th><th>Success</th><th>Tokens</th><th>Avg time</th></tr>
     ${stats.local.map(l => `<tr><td>${esc(l.name)}</td><td>${l.installed ? "✓" : "✕"}</td><td>${l.n}</td><td>${l.n ? Math.round(l.ok * 100) + "%" : "—"}</td><td>${fmtN(l.inp + l.outp)}</td><td>${dur(l.dur)}</td></tr>`).join("")}</table></div>`;
   drawChart(stats.daily);
-  $("#byCat").innerHTML = `<table><tr><th>Loại việc</th><th>Agent</th><th>Số lần</th><th>Thành công</th></tr>
+  $("#byCat").innerHTML = `<table><tr><th>Task type</th><th>Agent</th><th>Count</th><th>Success</th></tr>
     ${stats.by_category.map(r => `<tr><td>${esc(r.category || "—")}</td><td>${esc(r.kind)}</td><td>${r.n}</td><td>${Math.round((r.ok || 0) * 100)}%</td></tr>`).join("")}</table>`;
 }
 function limitMeters(a) {
   const w = (a.limits || {}).unifiedWindows || {};
-  const names = { five_hour: "Cửa sổ 5 giờ", seven_day: "7 ngày", seven_day_opus: "7 ngày (Opus)" };
+  const names = { five_hour: "5-hour window", seven_day: "7 days", seven_day_opus: "7 days (Opus)" };
   const rows = Object.entries(w).map(([k, v]) => {
     const expired = v.resetsAt && v.resetsAt * 1000 < Date.now();
     const pct = expired ? 0 : Math.round((v.utilization || 0) * 100);
     const color = pct >= 90 ? "var(--bad)" : pct >= 70 ? "var(--warn)" : "var(--series-1)";
     return `<div class="small" style="margin-top:8px;display:flex;justify-content:space-between"><span>${names[k] || esc(k)}</span>
-      <span><b>${pct}%</b> <span class="muted">· reset ${v.resetsAt ? new Date(v.resetsAt * 1000).toLocaleString() : "?"}</span></span></div>
+      <span><b>${pct}%</b> <span class="muted">· resets ${v.resetsAt ? new Date(v.resetsAt * 1000).toLocaleString() : "?"}</span></span></div>
       <div class="meter" role="meter" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%;background:${color}"></i></div>`;
   }).join("");
-  return rows || `<div class="small muted" style="margin-top:8px">Chưa có số liệu giới hạn (xuất hiện sau lần chạy đầu tiên).</div>`;
+  return rows || `<div class="small muted" style="margin-top:8px">No limit data yet (appears after the first run).</div>`;
 }
 async function resetAcc(n) { await api(`/api/accounts/${encodeURIComponent(n)}/reset`, {}); loadStats(); }
 
@@ -480,7 +480,7 @@ function drawChart(rows) {
   const data = days.map(d => ({ d, c: val(d, "claude"), l: val(d, "local") }));
   const max = Math.max(1, ...data.map(x => x.c + x.l));
   const W = Math.max(320, $("#chart").clientWidth || 700), Hh = 180, pad = 34, bw = (W - pad) / days.length;
-  let svg = `<svg viewBox="0 0 ${W} ${Hh + 22}" width="100%" role="img" aria-label="Token theo ngày">`;
+  let svg = `<svg viewBox="0 0 ${W} ${Hh + 22}" width="100%" role="img" aria-label="Tokens per day">`;
   [0, .5, 1].forEach(f => { const y = Hh - f * (Hh - 10); svg += `<line x1="${pad}" x2="${W}" y1="${y}" y2="${y}" stroke="var(--border)"/><text x="0" y="${y + 4}" font-size="10" fill="var(--muted)">${fmtN(max * f)}</text>`; });
   data.forEach((x, i) => {
     const X = pad + i * bw + bw * .2, w = bw * .6, hc = x.c / max * (Hh - 10), hl = x.l / max * (Hh - 10);
@@ -496,7 +496,7 @@ function drawChart(rows) {
     r.onmousemove = e => { const [d, c, l] = r.dataset.tip.split("|"); tip.style.display = "block"; tip.style.left = e.clientX + 12 + "px"; tip.style.top = e.clientY + 12 + "px"; tip.innerHTML = `<b>${d}</b><br>Claude: ${fmtN(+c)}<br>Local: ${fmtN(+l)}`; };
     r.onmouseleave = () => tip.style.display = "none";
   });
-  $("#chartTable").innerHTML = `<table><tr><th>Ngày</th><th>Claude</th><th>Local</th></tr>${data.map(x => `<tr><td>${x.d}</td><td>${fmtN(x.c)}</td><td>${fmtN(x.l)}</td></tr>`).join("")}</table>`;
+  $("#chartTable").innerHTML = `<table><tr><th>Day</th><th>Claude</th><th>Local</th></tr>${data.map(x => `<tr><td>${x.d}</td><td>${fmtN(x.c)}</td><td>${fmtN(x.l)}</td></tr>`).join("")}</table>`;
 }
 
 // ---------- brain ----------
@@ -504,28 +504,28 @@ async function loadBrain() {
   loadProposals();
   const [lessons, perms] = await Promise.all([api("/api/lessons"), api("/api/permissions")]);
   $("#lessons").innerHTML = lessons.length ? lessons.map(l => `<div class="lesson ${l.pending ? "pending" : l.enabled ? "" : "off"}">
-    <div class="txt">${l.pending ? `<span class="badge s-review">◎ Chờ duyệt</span> ` : ""}${esc(l.text)}<div class="small muted">${esc(l.scope)} · điểm ${l.score.toFixed(1)} · dùng ${l.uses} lần${l.source_task ? " · từ task #" + l.source_task : ""}</div></div>
-    ${l.pending ? `<button class="btn good" onclick="lesson(${l.id}, {approve: 1})">Duyệt</button>`
-      : `<button class="btn ghost" onclick="lesson(${l.id}, {enabled: ${l.enabled ? 0 : 1}})">${l.enabled ? "Tắt" : "Bật"}</button>`}
-    <button class="btn ghost" onclick="lesson(${l.id}, {delete: 1})">Xoá</button></div>`).join("") : `<div class="empty">Chưa có bài học. Nhận xét khi bạn từ chối kết quả, và các lệnh verify thất bại, sẽ thành bài học.</div>`;
-  $("#perms").innerHTML = perms.length ? `<table><tr><th>Quy tắc</th><th>Bị chặn</th><th>Trạng thái</th><th></th></tr>${perms.map(p => `<tr><td><code>${esc(p.rule)}</code></td><td>${p.count} lần</td><td>${esc(p.status)}</td>
-    <td>${p.status === "pending" ? `<button class="btn good" onclick="perm(${p.id}, true)">Cho phép</button> <button class="btn ghost" onclick="perm(${p.id}, false)">Bỏ qua</button>` : ""}</td></tr>`).join("")}</table>` : `<div class="empty">Chưa có tool nào bị chặn.</div>`;
+    <div class="txt">${l.pending ? `<span class="badge s-review">◎ Awaiting approval</span> ` : ""}${esc(l.text)}<div class="small muted">${esc(l.scope)} · score ${l.score.toFixed(1)} · used ${l.uses}×${l.source_task ? " · from task #" + l.source_task : ""}</div></div>
+    ${l.pending ? `<button class="btn good" onclick="lesson(${l.id}, {approve: 1})">Approve</button>`
+      : `<button class="btn ghost" onclick="lesson(${l.id}, {enabled: ${l.enabled ? 0 : 1}})">${l.enabled ? "Disable" : "Enable"}</button>`}
+    <button class="btn ghost" onclick="lesson(${l.id}, {delete: 1})">Delete</button></div>`).join("") : `<div class="empty">No lessons yet. Your feedback when you reject a result, and failed verify commands, become lessons.</div>`;
+  $("#perms").innerHTML = perms.length ? `<table><tr><th>Rule</th><th>Blocked</th><th>Status</th><th></th></tr>${perms.map(p => `<tr><td><code>${esc(p.rule)}</code></td><td>${p.count}×</td><td>${esc(p.status)}</td>
+    <td>${p.status === "pending" ? `<button class="btn good" onclick="perm(${p.id}, true)">Allow</button> <button class="btn ghost" onclick="perm(${p.id}, false)">Dismiss</button>` : ""}</td></tr>`).join("")}</table>` : `<div class="empty">No tool has been blocked yet.</div>`;
 }
 async function showDiff(id) {
   const box = $("#diffBox"); const r = await api(`/api/tasks/${id}/diff`);
-  box.textContent = r.diff || r.error || "(trống)"; box.classList.remove("hidden");
+  box.textContent = r.diff || r.error || "(empty)"; box.classList.remove("hidden");
 }
 async function mergeTask(id) {
   const r = await api(`/api/tasks/${id}/merge`, {});
-  if (r.error) alert("Không merge được: " + r.error); refreshDetail(); loadTasks();
+  if (r.error) alert("Merge failed: " + r.error); refreshDetail(); loadTasks();
 }
 async function discardTask(id, deleteBranch) {
-  if (!confirm(deleteBranch ? "Xoá worktree và nhánh đã merge?" : "Xoá thư mục worktree? Nhánh vẫn được giữ.")) return;
+  if (!confirm(deleteBranch ? "Remove the worktree and the merged branch?" : "Remove the worktree folder? The branch is kept.")) return;
   const r = await api(`/api/tasks/${id}/discard`, { delete_branch: deleteBranch });
   if (r.error) alert(r.error); refreshDetail(); loadTasks();
 }
-const PSTATUS = { pending: ["s-review", "◎ Chờ duyệt"], applied: ["s-done", "✓ Đã áp dụng"], rejected: ["s-cancelled", "✕ Đã từ chối"],
-  rolled_back: ["s-queued", "↺ Đã hoàn tác"], invalid: ["s-failed", "✕ Không hợp lệ"] };
+const PSTATUS = { pending: ["s-review", "◎ Awaiting approval"], applied: ["s-done", "✓ Applied"], rejected: ["s-cancelled", "✕ Rejected"],
+  rolled_back: ["s-queued", "↺ Rolled back"], invalid: ["s-failed", "✕ Invalid"] };
 async function loadProposals() {
   const ps = await api("/api/proposals");
   $("#proposals").innerHTML = ps.length ? ps.map(p => {
@@ -535,14 +535,14 @@ async function loadProposals() {
       <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><b>${esc(p.title)}</b><span class="badge ${cls}">${label}</span></div>
       <div class="small muted">${where} · ${esc(p.action || "")} · <code>${esc(p.target_path || p.target || "")}</code></div>
       <p style="margin:6px 0">${esc(p.rationale || "")}</p>
-      <div class="small">Bằng chứng: ${(p.evidence || []).map(i => `<a href="#" onclick="openTask(${+i});return false">#${+i}</a>`).join(", ") || "—"}</div>
+      <div class="small">Evidence: ${(p.evidence || []).map(i => `<a href="#" onclick="openTask(${+i});return false">#${+i}</a>`).join(", ") || "—"}</div>
       ${p.error ? `<div class="small" style="color:var(--bad)">${esc(p.error)}</div>` : ""}
-      <details ${p.status === "pending" ? "open" : ""}><summary class="small">Nội dung sẽ ${p.kind === "skill" ? "ghi vào skill" : "thêm vào cuối CLAUDE.md"}</summary><pre>${esc(p.content || "")}</pre></details>
+      <details ${p.status === "pending" ? "open" : ""}><summary class="small">Content to ${p.kind === "skill" ? "write as the skill" : "append to CLAUDE.md"}</summary><pre>${esc(p.content || "")}</pre></details>
       <div class="actions">
-        ${p.status === "pending" ? `<button class="btn good" onclick="proposal(${p.id}, 'apply')">Duyệt & áp dụng</button><button class="btn ghost" onclick="proposal(${p.id}, 'reject')">Từ chối</button>` : ""}
-        ${p.status === "applied" ? `<button class="btn ghost" onclick="proposal(${p.id}, 'rollback')">Hoàn tác</button>` : ""}
+        ${p.status === "pending" ? `<button class="btn good" onclick="proposal(${p.id}, 'apply')">Approve and apply</button><button class="btn ghost" onclick="proposal(${p.id}, 'reject')">Reject</button>` : ""}
+        ${p.status === "applied" ? `<button class="btn ghost" onclick="proposal(${p.id}, 'rollback')">Roll back</button>` : ""}
       </div></div>`;
-  }).join("") : `<div class="empty">Chưa có đề xuất nào.</div>`;
+  }).join("") : `<div class="empty">No proposals yet.</div>`;
 }
 async function proposal(id, action) {
   const r = await api("/api/proposals/" + id, { action });
@@ -550,7 +550,7 @@ async function proposal(id, action) {
 }
 $("#coachRun").onclick = async () => {
   const r = await api("/api/coach/run", {});
-  $("#coachMsg").textContent = r.id ? `Đã tạo task #${r.id} — đề xuất sẽ hiện ở đây khi xong.` : r.error; loadTasks();
+  $("#coachMsg").textContent = r.id ? `Started task #${r.id}; proposals appear here when it finishes.` : r.error; loadTasks();
 };
 async function lesson(id, body) { await api("/api/lessons/" + id, body); loadBrain(); }
 async function perm(id, approve) { await api("/api/permissions/" + id, { approve }); loadBrain(); }
@@ -561,7 +561,7 @@ let refreshTimer = null;
 function connect() {
   const es = new EventSource("/api/stream" + (TOKEN ? "?token=" + encodeURIComponent(TOKEN) : ""));
   es.onopen = () => { $("#liveDot").classList.add("on"); $("#liveTxt").textContent = "live"; };
-  es.onerror = () => { $("#liveDot").classList.remove("on"); $("#liveTxt").textContent = "mất kết nối…"; };
+  es.onerror = () => { $("#liveDot").classList.remove("on"); $("#liveTxt").textContent = "reconnecting…"; };
   es.onmessage = m => {
     const msg = JSON.parse(m.data);
     if (msg.type === "event") appendEvent(msg.event);

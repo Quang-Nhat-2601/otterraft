@@ -71,9 +71,9 @@ class AccountPool:
         return accounts[0] if accounts else None
 
     def park_login(self, name):
-        """Take a logged-out account out of rotation until `orchestrator login <name>`."""
+        """Take a logged-out account out of rotation until `otterraft login <name>`."""
         return self.cool_down(name, time.time() + 10 * 365 * 86400,
-                              f"login required: run `python -m orchestrator login {name}`")
+                              f"login required: run `otterraft login {name}`")
 
     def acquire(self, exclude=()):
         """Reserve a slot on the best account. Returns the account dict or None."""

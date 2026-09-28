@@ -47,7 +47,7 @@ def prepare(cfg, task):
         return None
     slug = re.sub(r"[^A-Za-z0-9._-]+", "-", Path(root).name)[:40]
     path = Path(cfg["data_dir"]) / "worktrees" / f"{slug}-task-{task['id']}"
-    branch = f"{ws.get('branch_prefix', 'orch/task-')}{task['id']}"
+    branch = f"{ws.get('branch_prefix', 'otterraft/task-')}{task['id']}"
     base_ref = git(["rev-parse", "HEAD"], root)
     base_branch = git(["rev-parse", "--abbrev-ref", "HEAD"], root)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -81,9 +81,9 @@ def commit(task):
     if git(["diff", "--cached", "--name-only"], top):
         env = {}
         if not _has_identity(top):
-            env = {"GIT_AUTHOR_NAME": "AI Orchestrator", "GIT_AUTHOR_EMAIL": "orchestrator@localhost",
-                   "GIT_COMMITTER_NAME": "AI Orchestrator", "GIT_COMMITTER_EMAIL": "orchestrator@localhost"}
-        git(["commit", "-q", "--no-verify", "-m", f"orchestrator: task #{task['id']} {task.get('title') or ''}"[:200]],
+            env = {"GIT_AUTHOR_NAME": "OtterRaft", "GIT_AUTHOR_EMAIL": "otterraft@localhost",
+                   "GIT_COMMITTER_NAME": "OtterRaft", "GIT_COMMITTER_EMAIL": "otterraft@localhost"}
+        git(["commit", "-q", "--no-verify", "-m", f"otterraft: task #{task['id']} {task.get('title') or ''}"[:200]],
             top, env=env)
     files = git(["diff", "--name-only", task["base_ref"], "HEAD"], top).splitlines()
     stat = git(["diff", "--shortstat", task["base_ref"], "HEAD"], top)

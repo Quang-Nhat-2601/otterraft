@@ -13,7 +13,7 @@ import shutil
 import time
 from pathlib import Path
 
-COACH_SYSTEM = """You are the Reflection Coach of an AI task orchestrator. You never do the tasks
+COACH_SYSTEM = """You are the Reflection Coach of OtterRaft, an AI task orchestrator. You never do the tasks
 yourself. You read the evidence of recent tasks and propose the smallest durable changes that
 would have made the agents succeed with less help from the user.
 

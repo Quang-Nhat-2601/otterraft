@@ -59,7 +59,7 @@ class LocalLLM:
                 "input_tokens": data.get("prompt_eval_count", 0),
                 "output_tokens": data.get("eval_count", 0),
                 "duration_ms": int((time.time() - t0) * 1000),
-                # Ollama's own timings, used by `orchestrator bench`
+                # Ollama's own timings, used by `otterraft bench`
                 "load_sec": (data.get("load_duration") or 0) / ns,
                 "prompt_tps": _rate(data.get("prompt_eval_count"), data.get("prompt_eval_duration")),
                 "gen_tps": _rate(data.get("eval_count"), data.get("eval_duration"))}

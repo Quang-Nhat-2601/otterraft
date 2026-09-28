@@ -218,7 +218,7 @@ class Orchestrator:
                 self._run_local(task)
         except Exception as e:
             traceback.print_exc()
-            self.db.update_task(task["id"], status="failed", error=f"orchestrator error: {e}",
+            self.db.update_task(task["id"], status="failed", error=f"OtterRaft error: {e}",
                                 finished_at=time.time())
             self.emit(task["id"], "error", {"text": str(e)})
         finally:
@@ -234,7 +234,7 @@ class Orchestrator:
             return task
         fields = None
         if not task.get("workdir"):
-            # Never let an agent loose in the orchestrator's own directory.
+            # Never let an agent loose in OtterRaft's own directory.
             wd = Path(self.cfg["data_dir"]) / "workspaces" / f"task-{task['id']}"
             wd.mkdir(parents=True, exist_ok=True)
             fields = {"workdir": str(wd), "exec_dir": str(wd)}
@@ -373,7 +373,7 @@ class Orchestrator:
         elif kind == "login":
             self.pool.park_login(name)
             self.emit(tid, "account_login_required", {"account": name})
-            self.notify("Account logged out", f"{name} needs `python -m orchestrator login {name}`")
+            self.notify("Account logged out", f"{name} needs `otterraft login {name}`")
         elif kind == "transient":
             n = (task.get("retries") or 0) + 1
             if n > self.cfg["claude"].get("transient_retries", 5):

@@ -3,14 +3,14 @@ import json
 import re
 
 REPORT_INSTRUCTIONS = """
-You are running unattended under an orchestrator. Nobody is watching the terminal.
+You are running unattended under OtterRaft, a task orchestrator. Nobody is watching the terminal.
 - Keep a todo list (TodoWrite / task tools) for any multi-step work and update it as you go;
-  the orchestrator turns it into a progress bar.
+  OtterRaft turns it into a progress bar.
 - Do not stop to ask questions. Make a reasonable decision and write it down in the report.
   Only if you truly cannot proceed, set status "needs_input" and put your questions in "questions".
 - When you finish, end your final message with exactly one fenced block like this:
 
-```orchestrator-report
+```otterraft-report
 {
   "status": "done | partial | needs_input | failed",
   "summary": "one paragraph: what you did",
@@ -25,7 +25,7 @@ You are running unattended under an orchestrator. Nobody is watching the termina
 ```
 """.strip()
 
-_BLOCK = re.compile(r"```orchestrator-report\s*(\{.*?\})\s*```", re.S)
+_BLOCK = re.compile(r"```(?:otterraft|orchestrator)-report\s*(\{.*?\})\s*```", re.S)
 _ANY_JSON = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.S)
 
 

@@ -13,14 +13,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import config  # noqa: E402
-from orchestrator.failures import classify, parse_reset  # noqa: E402
-from orchestrator.agents.report import parse_report  # noqa: E402
-from orchestrator.bus import Bus  # noqa: E402
-from orchestrator.db import DB  # noqa: E402
-from orchestrator.router import heuristic_classify  # noqa: E402
-from orchestrator.runner import Orchestrator  # noqa: E402
-from orchestrator.server import serve  # noqa: E402
+from otterraft import config  # noqa: E402
+from otterraft.failures import classify, parse_reset  # noqa: E402
+from otterraft.agents.report import parse_report  # noqa: E402
+from otterraft.bus import Bus  # noqa: E402
+from otterraft.db import DB  # noqa: E402
+from otterraft.router import heuristic_classify  # noqa: E402
+from otterraft.runner import Orchestrator  # noqa: E402
+from otterraft.server import serve  # noqa: E402
 
 FAKE_CLAUDE = str(Path(__file__).with_name("fake_claude.py"))
 
@@ -46,7 +46,7 @@ class FakeOllama(BaseHTTPRequestHandler):
         req = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         system, user = req["messages"][0]["content"], req["messages"][-1]["content"]
         if req.get("format") == "json" and "Classify" in system:
-            cat = "summarize" if "tóm tắt" in user.lower() else "bugfix"
+            cat = "summarize" if "summarize" in user.lower() else "bugfix"
             content = json.dumps({"category": cat, "complexity": 1 if cat == "summarize" else 4,
                                   "needs_repo": cat != "summarize"})
         elif req.get("format") == "json":
@@ -54,7 +54,7 @@ class FakeOllama(BaseHTTPRequestHandler):
         elif self.fail_on in user:
             content = ""
         else:
-            content = "Tóm tắt: nội dung ngắn gọn."
+            content = "Summary: a short text."
         self._json({"message": {"content": content}, "prompt_eval_count": 50, "eval_count": 20})
 
 
@@ -78,7 +78,7 @@ class E2E(unittest.TestCase):
         cls.shared.mkdir(parents=True)
         cls.log = Path(cls.tmp) / "claude-calls.jsonl"
         os.environ["FAKE_CLAUDE_LOG"] = str(cls.log)
-        cfg_path = Path(cls.tmp) / "orchestrator.json"
+        cfg_path = Path(cls.tmp) / "otterraft.json"
         cfg_path.write_text(json.dumps({
             "port": 0, "data_dir": cls.tmp + "/data", "claude_bin": FAKE_CLAUDE,
             "shared_config_dir": str(cls.shared), "claude": {"transient_backoff_sec": 0.2},
@@ -159,18 +159,18 @@ class E2E(unittest.TestCase):
         self.assertEqual(self.api(f"/api/tasks/{tid}")["status"], "done")
 
     def test_simple_task_goes_local(self):
-        tid = self.api("/api/tasks", {"prompt": "Tóm tắt đoạn văn này: AI giúp lập trình viên."})["id"]
+        tid = self.api("/api/tasks", {"prompt": "Summarize this paragraph: AI helps developers."})["id"]
         t = wait_for(lambda: (lambda t: t if t["status"] in ("review", "failed") else None)(
             self.api(f"/api/tasks/{tid}")))
         self.assertEqual(t["agent"], "local")
-        self.assertIn("Tóm tắt", t["result_text"])
+        self.assertIn("Summary", t["result_text"])
         self.assertFalse(t["exec_dir"])  # a local model has no tools, so no directory
         self.assertEqual(t["status"], "review")
 
     def test_local_failure_escalates_to_claude(self):
         self.orch.pool.reset("acc1")
         self.orch.pool.cool_down("acc1", time.time() + 3600)
-        tid = self.api("/api/tasks", {"prompt": "Tóm tắt FAILME"})["id"]
+        tid = self.api("/api/tasks", {"prompt": "Summarize FAILME"})["id"]
         t = wait_for(lambda: (lambda t: t if t["status"] in ("review", "failed") else None)(
             self.api(f"/api/tasks/{tid}")))
         self.assertEqual(t["agent"], "quick")  # a text task goes to a quick Claude answer, not a full agent
@@ -190,7 +190,7 @@ class E2E(unittest.TestCase):
                                       "agent_pref": "claude"})["id"]
         t = self.wait_status(tid)
         self.assertEqual(t["status"], "review", t.get("error"))
-        self.assertEqual(t["branch"], f"orch/task-{tid}")
+        self.assertEqual(t["branch"], f"otterraft/task-{tid}")
         self.assertNotEqual(t["exec_dir"], str(repo))
         self.assertEqual(t["changed_files"], ["fix.txt"])  # the CLAUDE.md overlay is not committed
         self.assertEqual((Path(t["exec_dir"]) / "CLAUDE.md").read_text(), "# rules not committed yet\n")
@@ -201,14 +201,14 @@ class E2E(unittest.TestCase):
         self.assertTrue((repo / "fix.txt").exists())
         self.api(f"/api/tasks/{tid}/discard", {"delete_branch": True})
         self.assertFalse(Path(t["exec_dir"]).exists())
-        self.assertNotIn(f"orch/task-{tid}", g("branch"))
+        self.assertNotIn(f"otterraft/task-{tid}", g("branch"))
 
     def test_transient_error_retries_same_task(self):
         tid = self.api("/api/tasks", {"prompt": "OVERLOAD fix app.py", "agent_pref": "claude"})["id"]
         t = self.wait_status(tid)
         self.assertEqual(t["status"], "review", t.get("error"))
         self.assertEqual(t["retries"], 1)
-        self.assertIn("workspaces", t["exec_dir"])  # never the orchestrator's own directory
+        self.assertIn("workspaces", t["exec_dir"])  # never OtterRaft's own directory
         kinds = [e["kind"] for e in self.api(f"/api/tasks/{tid}/events")]
         self.assertIn("retry_later", kinds)
         self.assertNotIn("account_limit", kinds)  # overload is not a quota problem
@@ -260,7 +260,7 @@ class E2E(unittest.TestCase):
 
     def test_dashboard_served(self):
         with urllib.request.urlopen(self.base + "/") as r:
-            self.assertIn(b"AI Orchestrator", r.read())
+            self.assertIn(b"OtterRaft", r.read())
 
 
 class Units(unittest.TestCase):
@@ -282,7 +282,7 @@ class Units(unittest.TestCase):
         os.environ["FAKE_CLAUDE_LOG"] = str(log)
         self.addCleanup(os.environ.pop, "FAKE_CLAUDE_LOG", None)
         orch = self._orch()  # defaults: brain = Claude sonnet, quick answers on, local off
-        tid = orch.submit("Tóm tắt thay đổi trong bản release này")
+        tid = orch.submit("Summarize the changes in this release")
         t = self._done(orch, tid)
         self.assertEqual((t["agent"], t["status"], t["category"]), ("quick", "review", "summarize"))
         self.assertIn("claude claude-sonnet-test", t["route_reason"])  # decided by the brain
@@ -310,13 +310,13 @@ class Units(unittest.TestCase):
 
     def test_quick_answer_escalates_to_agent_when_it_needs_files(self):
         orch = self._orch()
-        tid = orch.submit("Tóm tắt QUICKFAIL")
+        tid = orch.submit("Summarize QUICKFAIL")
         t = wait_for(lambda: (lambda t: t if t["agent"] == "claude" and t["status"] == "review" else None)(orch.db.task(tid)))
         self.assertIn("escalated from quick", t["route_reason"])
 
     def test_brain_falls_back_to_keywords_without_accounts(self):
         orch = self._orch(accounts=[])
-        out = orch.router.classify("Dịch đoạn này sang tiếng Anh")
+        out = orch.router.classify("Translate this paragraph into French")
         self.assertEqual((out["category"], out["source"]), ("translate", "keywords"))
 
     def test_classify_failures(self):
@@ -357,7 +357,7 @@ class Units(unittest.TestCase):
             orch.stop.set()
 
     def test_suggest_rule(self):
-        from orchestrator.learning import suggest_rule
+        from otterraft.learning import suggest_rule
         self.assertEqual(suggest_rule("Bash", {"command": "pytest -q tests"}), "Bash(pytest:*)")
         self.assertEqual(suggest_rule("Bash", {"command": "git status"}), "Bash(git status:*)")
         self.assertIsNone(suggest_rule("Bash", {"command": "git push --force"}))
@@ -366,7 +366,7 @@ class Units(unittest.TestCase):
         self.assertEqual(suggest_rule("WebFetch", {"url": "x"}), "WebFetch")
 
     def test_sync_shared(self):
-        from orchestrator.accounts import sync_shared
+        from otterraft.accounts import sync_shared
         tmp = Path(tempfile.mkdtemp())
         shared, acc = tmp / "home" / ".claude", tmp / "acc2"
         (shared / "skills" / "my-skill").mkdir(parents=True)
@@ -387,13 +387,13 @@ class Units(unittest.TestCase):
         self.assertIn("db", state["mcpServers"])
 
     def test_parse_report(self):
-        r = parse_report('blah\n```orchestrator-report\n{"status":"done","summary":"x"}\n```')
+        r = parse_report('blah\n```otterraft-report\n{"status":"done","summary":"x"}\n```')
         self.assertEqual(r["summary"], "x")
         self.assertEqual(r["test_cases"], [])
         self.assertIsNone(parse_report("no report here"))
 
     def test_prefers_account_under_threshold(self):
-        from orchestrator.accounts import AccountPool
+        from otterraft.accounts import AccountPool
         tmp = tempfile.mkdtemp()
         cfg = {"accounts": [{"name": "a", "priority": 1}, {"name": "b", "priority": 2}],
                "claude": {"switch_at_utilization": 0.9, "default_cooldown_min": 60}}
@@ -408,6 +408,8 @@ class Units(unittest.TestCase):
         self.assertEqual([a["name"] for a in pool.available()], ["a"])
 
     def test_heuristic_classify(self):
+        self.assertEqual(heuristic_classify("Translate this paragraph into French")["category"], "translate")
+        # Tasks may be written in Vietnamese; the keyword fallback understands both languages.
         self.assertEqual(heuristic_classify("Dịch đoạn này sang tiếng Anh")["category"], "translate")
         c = heuristic_classify("Sửa lỗi crash trong src/app.py")
         self.assertEqual(c["category"], "bugfix")

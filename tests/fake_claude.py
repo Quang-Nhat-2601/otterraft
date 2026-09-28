@@ -40,7 +40,7 @@ if args[args.index("--output-format") + 1] == "json":
     system = args[args.index("--system-prompt") + 1] if "--system-prompt" in args else ""
     low = prompt.lower()
     if "dispatcher" in system:
-        text_task = any(w in low for w in ("tóm tắt", "dịch", "commit message", "summarize"))
+        text_task = any(w in low for w in ("summarize", "translate", "commit message"))
         answer = json.dumps({"category": "summarize" if text_task else "bugfix",
                              "complexity": 5 if "big refactor" in low else 1 if text_task else 2,
                              "needs_repo": not text_task})
@@ -105,7 +105,7 @@ report = {"status": "done", "summary": "Fixed the bug" + (" after resume" if res
           "input": prompt[:100], "output": ["app.py: handle empty email"],
           "test_cases": [{"title": "Login with blank email", "steps": ["open /login", "submit"],
                           "expected": "400 error, no crash"}], "notes": ""}
-text = "All done.\n```orchestrator-report\n" + json.dumps(report) + "\n```"
+text = "All done.\n```otterraft-report\n" + json.dumps(report) + "\n```"
 out({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}})
 out({"type": "result", "subtype": "success", "is_error": False, "session_id": sid, "result": text,
      "total_cost_usd": 0.12, "usage": {"input_tokens": 1000, "cache_read_input_tokens": 500, "output_tokens": 200},
