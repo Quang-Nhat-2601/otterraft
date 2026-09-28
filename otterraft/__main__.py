@@ -83,7 +83,7 @@ def cmd_login(args, cfg):
         Path(acc["config_dir"]).mkdir(parents=True, exist_ok=True)
         env["CLAUDE_CONFIG_DIR"] = acc["config_dir"]
     print(f"Starting Claude Code for account '{acc['name']}'. Type /login, sign in, then /exit.")
-    subprocess.call([cfg["claude_bin"]], env=env)
+    subprocess.call(config.claude_command(cfg), env=env)
     open_db(cfg).execute("UPDATE account_state SET cooldown_until=0, last_error=NULL WHERE name=? "
                          "AND last_error LIKE 'login required%'", (acc["name"],))
     for line in sync_shared(cfg):
@@ -94,7 +94,10 @@ def cmd_doctor(args, cfg):
     from .agents.local import LocalLLM
     ok = True
     path = shutil.which(cfg["claude_bin"])
-    print(f"[{'ok' if path else 'X '}] claude CLI: {path or 'not found'}")
+    print(f"[{'ok' if path else 'X '}] claude CLI: {' '.join(config.claude_command(cfg)) if path else 'not found'}")
+    if path and os.name == "nt" and config.claude_command(cfg)[0] == path and path.lower().endswith((".cmd", ".bat")):
+        print("[??] claude is a .cmd wrapper and its cli.js was not found; install Claude Code with the "
+              "native Windows installer, or set \"claude_bin\" to the full path of claude.exe")
     ok &= bool(path)
     for a in cfg["accounts"]:
         li = _logged_in(a)

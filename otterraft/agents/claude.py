@@ -7,6 +7,7 @@ import threading
 import time
 from pathlib import Path
 
+from ..config import claude_command
 from ..failures import classify
 
 
@@ -60,7 +61,7 @@ class ClaudeRun:
 
     def command(self):
         c = self.cfg["claude"]
-        cmd = [self.cfg["claude_bin"], "-p", self.prompt, "--output-format", "stream-json",
+        cmd = [*claude_command(self.cfg), "-p", self.prompt, "--output-format", "stream-json",
                "--verbose", "--permission-mode", c["permission_mode"]]
         if c.get("max_turns"):
             cmd += ["--max-turns", str(c["max_turns"])]
@@ -239,7 +240,7 @@ def quick_call(cfg, account, system, prompt, model, timeout=120):
     # A neutral cwd, so no project CLAUDE.md or settings get pulled in.
     cwd = Path(cfg["data_dir"]) / "brain"
     cwd.mkdir(parents=True, exist_ok=True)
-    cmd = [cfg["claude_bin"], "-p", prompt, "--output-format", "json", "--max-turns", "1",
+    cmd = [*claude_command(cfg), "-p", prompt, "--output-format", "json", "--max-turns", "1",
            "--tools", "", "--system-prompt", system, "--disable-slash-commands",
            "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}']
     if model:

@@ -93,6 +93,13 @@ Edit `otterraft.json` and list your accounts. Each account has its own config di
 
 `"config_dir": null` means the default `~/.claude`, i.e. the account you are already logged into.
 
+#### On Windows
+
+OtterRaft is developed on Linux and macOS. On Windows, WSL works exactly like Linux. Native Windows works too, with two things to know:
+
+- **Application Control / Smart App Control** can block the small unsigned launchers pip generates (`pip.exe`, `otterraft.exe`) with *"An Application Control policy has blocked this file"*. Run everything through Python instead: `python -m pip install -e .` and `python -m otterraft <command>`. If the venv's `python.exe` is blocked too, skip the venv and use the signed launcher: `py -m pip install --user -e .` and `py -m otterraft <command>`.
+- **Claude Code from npm** is a `claude.cmd` wrapper. OtterRaft finds the `cli.js` behind it and runs it with Node directly, so prompts with quotes and newlines arrive intact. `otterraft doctor` tells you which command it will use. With the native Windows installer there is nothing to do.
+
 ### 2. Log each account in (once)
 
 ```bash

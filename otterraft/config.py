@@ -3,6 +3,7 @@ import copy
 import json
 import os
 import secrets
+import shutil
 from pathlib import Path
 
 DEFAULTS = {
@@ -142,6 +143,23 @@ def load(path=None):
         if acc.get("config_dir"):
             acc["config_dir"] = os.path.expanduser(acc["config_dir"])
     return cfg
+
+
+def claude_command(cfg, windows=os.name == "nt"):
+    """The argv prefix that starts Claude Code. On Windows an npm install is a `claude.cmd`
+    wrapper, which Python cannot start directly and which would mangle multi-line prompts
+    through cmd.exe, so we run the wrapped `node cli.js` instead."""
+    if cfg.get("_claude_cmd"):
+        return cfg["_claude_cmd"]
+    exe = shutil.which(cfg["claude_bin"]) or cfg["claude_bin"]
+    cmd = [exe]
+    if windows and exe.lower().endswith((".cmd", ".bat")):
+        cli = Path(exe).parent / "node_modules" / "@anthropic-ai" / "claude-code" / "cli.js"
+        node = shutil.which("node")
+        if cli.exists() and node:
+            cmd = [node, str(cli)]
+    cfg["_claude_cmd"] = cmd
+    return cmd
 
 
 def persist(cfg, keys, value):

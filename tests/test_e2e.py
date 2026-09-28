@@ -356,6 +356,19 @@ class Units(unittest.TestCase):
         finally:
             orch.stop.set()
 
+    def test_windows_npm_claude_runs_through_node(self):
+        bin_dir = Path(tempfile.mkdtemp())
+        wrapper = bin_dir / "claude.cmd"
+        wrapper.write_text("@echo off")
+        wrapper.chmod(0o755)
+        cli = bin_dir / "node_modules" / "@anthropic-ai" / "claude-code" / "cli.js"
+        cli.parent.mkdir(parents=True)
+        cli.write_text("")
+        cmd = config.claude_command({"claude_bin": str(wrapper)}, windows=True)
+        self.assertTrue(cmd[0].endswith("node"), cmd)
+        self.assertEqual(cmd[1], str(cli))
+        self.assertEqual(config.claude_command({"claude_bin": str(wrapper)}, windows=False), [str(wrapper)])
+
     def test_suggest_rule(self):
         from otterraft.learning import suggest_rule
         self.assertEqual(suggest_rule("Bash", {"command": "pytest -q tests"}), "Bash(pytest:*)")
