@@ -17,14 +17,14 @@ import uuid
 from pathlib import Path
 
 args = sys.argv[1:]
-prompt = args[args.index("-p") + 1]
+prompt = sys.stdin.read()
 resume = args[args.index("--resume") + 1] if "--resume" in args else None
 cfg_dir = Path(os.environ.get("CLAUDE_CONFIG_DIR", os.path.expanduser("~/.claude")))
 sid = resume or str(uuid.uuid4())
 out = lambda m: print(json.dumps(m), flush=True)
 if os.environ.get("FAKE_CLAUDE_LOG"):
     with open(os.environ["FAKE_CLAUDE_LOG"], "a") as f:
-        f.write(json.dumps({"args": args, "cwd": os.getcwd(), "config": str(cfg_dir)}) + "\n")
+        f.write(json.dumps({"args": args, "prompt": prompt, "cwd": os.getcwd(), "config": str(cfg_dir)}) + "\n")
 
 
 def fail(text, turns=0):

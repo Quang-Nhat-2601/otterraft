@@ -115,6 +115,19 @@ def _main_state_file(shared_dir):
     return inside if inside.exists() else Path(shared_dir).parent / ".claude.json"
 
 
+def _link_without_symlink_rights(s, d):
+    """Windows without Developer Mode: a junction (dirs) or hard link (files) needs no admin and
+    stays live. A copy is the last resort; it goes stale and later runs report it as the account's own."""
+    try:
+        if s.is_dir() and os.name == "nt":
+            import _winapi
+            _winapi.CreateJunction(str(s), str(d))
+        else:
+            os.link(s, d)
+    except OSError:
+        (shutil.copytree if s.is_dir() else shutil.copy2)(s, d)
+
+
 def sync_shared(cfg, dry_run=False):
     """Link the shared config into each account's CLAUDE_CONFIG_DIR, so every account sees the
     same skills, CLAUDE.md, hooks, plugins and MCP servers. Never overwrites a real file or
@@ -134,7 +147,7 @@ def sync_shared(cfg, dry_run=False):
             s, d = src / item, dst / item
             if not s.exists():
                 continue
-            if d.is_symlink() and d.resolve() == s.resolve():
+            if d.exists() and os.path.samefile(d, s):  # symlink, junction or hard link
                 linked.append(item)
             elif d.exists() or d.is_symlink():
                 conflicts.append(item)
@@ -144,8 +157,8 @@ def sync_shared(cfg, dry_run=False):
                 dst.mkdir(parents=True, exist_ok=True)
                 try:
                     d.symlink_to(s, target_is_directory=s.is_dir())
-                except OSError:  # e.g. Windows without symlink rights: fall back to a copy
-                    (shutil.copytree if s.is_dir() else shutil.copy2)(s, d)
+                except OSError:
+                    _link_without_symlink_rights(s, d)
                 linked.append(item)
         mcp = _sync_mcp(src, dst, dry_run)
         mark = "ok" if not missing and not conflicts else "??"

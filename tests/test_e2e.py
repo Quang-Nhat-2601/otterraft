@@ -224,7 +224,7 @@ class E2E(unittest.TestCase):
         self.assertIn("session_reset", [e["kind"] for e in self.api(f"/api/tasks/{tid}/events")])
         last = self.calls()[-1]
         self.assertNotIn("--resume", last["args"])
-        self.assertIn("also add a test", last["args"][last["args"].index("-p") + 1])
+        self.assertIn("also add a test", last["prompt"])
 
     def test_reflection_coach_proposes_and_applies_with_rollback(self):
         for _ in range(2):
@@ -385,6 +385,36 @@ class Units(unittest.TestCase):
         state = json.loads((acc / ".claude.json").read_text())
         self.assertEqual(state["oauthAccount"]["email"], "b@x")
         self.assertIn("db", state["mcpServers"])
+        self.assertNotIn("CLAUDE.md (left", sync_shared(cfg)[0])  # a re-run sees its own links
+
+    def test_link_without_symlink_rights_stays_live(self):
+        from otterraft.accounts import _link_without_symlink_rights
+        tmp = Path(tempfile.mkdtemp())
+        (tmp / "src").mkdir()
+        (tmp / "f.md").write_text("v1")
+        _link_without_symlink_rights(tmp / "src", tmp / "dir_link")
+        _link_without_symlink_rights(tmp / "f.md", tmp / "file_link")
+        (tmp / "src" / "new-skill").mkdir()
+        self.assertTrue((tmp / "dir_link" / "new-skill").is_dir())
+        self.assertTrue(os.path.samefile(tmp / "file_link", tmp / "f.md"))
+
+    def test_brain_uses_its_own_api_key_not_the_pool(self):
+        from unittest import mock
+        from otterraft.agents.claude import account_env
+        from otterraft.router import Router
+        seen = {}
+
+        def fake_quick_call(cfg, account, *a, **k):
+            seen["env"] = account_env(account)
+            return {"ok": True, "text": '{"category": "summarize", "complexity": 1}', "model": "sonnet",
+                    "cost_usd": 0, "input_tokens": 0, "output_tokens": 0, "cached_tokens": 0, "duration_ms": 0}
+        pool = mock.Mock()
+        router = Router({"brain": {}, "router": {}}, mock.Mock(), mock.Mock(enabled=False), pool)
+        with mock.patch.dict(os.environ, {"OTTERRAFT_BRAIN_API_KEY": "sk-test"}), \
+                mock.patch("otterraft.agents.claude.quick_call", fake_quick_call):
+            self.assertEqual(router.classify("Summarize this")["category"], "summarize")
+        self.assertEqual(seen["env"]["ANTHROPIC_API_KEY"], "sk-test")
+        pool.best_available.assert_not_called()
 
     def test_parse_report(self):
         r = parse_report('blah\n```otterraft-report\n{"status":"done","summary":"x"}\n```')

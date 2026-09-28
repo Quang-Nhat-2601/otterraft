@@ -60,7 +60,8 @@ class ClaudeRun:
 
     def command(self):
         c = self.cfg["claude"]
-        cmd = [self.cfg["claude_bin"], "-p", self.prompt, "--output-format", "stream-json",
+        # The prompt goes through stdin: Windows caps a whole command line at ~32K chars.
+        cmd = [self.cfg["claude_bin"], "-p", "--output-format", "stream-json",
                "--verbose", "--permission-mode", c["permission_mode"]]
         if c.get("max_turns"):
             cmd += ["--max-turns", str(c["max_turns"])]
@@ -98,11 +99,16 @@ class ClaudeRun:
         try:
             self.proc = subprocess.Popen(
                 self.command(), cwd=self.workdir or None, env=account_env(self.account),
-                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 text=True, encoding="utf-8", errors="replace", bufsize=1)
-        except FileNotFoundError:
-            res["error"] = f"Claude CLI not found: {self.cfg['claude_bin']}"
+        except OSError as e:
+            res["error"] = f"Could not start the Claude CLI ({self.cfg['claude_bin']}): {e}"
             return res
+        try:
+            self.proc.stdin.write(self.prompt)
+            self.proc.stdin.close()
+        except OSError:
+            pass  # the CLI exited early; its stderr says why
 
         def pump_stderr():
             for line in self.proc.stderr:
@@ -239,21 +245,21 @@ def quick_call(cfg, account, system, prompt, model, timeout=120):
     # A neutral cwd, so no project CLAUDE.md or settings get pulled in.
     cwd = Path(cfg["data_dir"]) / "brain"
     cwd.mkdir(parents=True, exist_ok=True)
-    cmd = [cfg["claude_bin"], "-p", prompt, "--output-format", "json", "--max-turns", "1",
+    cmd = [cfg["claude_bin"], "-p", "--output-format", "json", "--max-turns", "1",
            "--tools", "", "--system-prompt", system, "--disable-slash-commands",
            "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}']
     if model:
         cmd += ["--model", model]
     t0 = time.time()
     try:
-        p = subprocess.run(cmd, cwd=cwd, env=account_env(account), stdin=subprocess.DEVNULL,
+        p = subprocess.run(cmd, cwd=cwd, env=account_env(account), input=prompt,
                            capture_output=True, text=True, encoding="utf-8", errors="replace",
                            timeout=timeout)
-    except FileNotFoundError:
-        res["error"] = f"Claude CLI not found: {cfg['claude_bin']}"
-        return res
     except subprocess.TimeoutExpired:
         res.update(error=f"timed out after {timeout}s", failure="transient")
+        return res
+    except OSError as e:
+        res["error"] = f"Could not start the Claude CLI ({cfg['claude_bin']}): {e}"
         return res
     res["duration_ms"] = int((time.time() - t0) * 1000)
     try:

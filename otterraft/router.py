@@ -1,4 +1,5 @@
 """The "brain": decides which agent gets a task, and learns from outcomes via success stats."""
+import os
 import re
 
 # Keyword rules, the last fallback when neither Claude nor a local model can classify a task.
@@ -73,7 +74,10 @@ class Router:
 
     def _claude_classify(self, prompt, task_id):
         from .agents.claude import parse_json_answer, quick_call
-        account = self.pool.best_available()
+        # A dedicated variable: a plain ANTHROPIC_API_KEY would also switch the user's own sessions to API billing.
+        key = os.environ.get("OTTERRAFT_BRAIN_API_KEY")
+        account = {"name": "brain-api", "use_api_key": True, "env": {"ANTHROPIC_API_KEY": key}} \
+            if key else self.pool.best_available()
         if not account:
             return None
         b = self.cfg["brain"]
@@ -84,7 +88,9 @@ class Router:
                           output_tokens=res["output_tokens"], cached_tokens=res["cached_tokens"],
                           duration_ms=res["duration_ms"], ok=1 if res["ok"] else 0, category="routing")
         if not res["ok"]:
-            if res["failure"] == "quota":
+            if key:
+                pass  # the API key isn't a pool account: nothing to cool down or park
+            elif res["failure"] == "quota":
                 self.pool.cool_down(account["name"], res["reset_at"] or self.pool.window_reset(account["name"]),
                                     res["error"] or "")
             elif res["failure"] == "login":

@@ -208,6 +208,7 @@ Only short error messages printed by the CLI are classified, so a task *about* r
 | `claude.model` | `""` | Model for hard agent tasks (`""` = the account's default) |
 | `claude.light_model` / `light_max_complexity` | `sonnet` / 3 | Agent tasks rated at most this complexity run on the light model |
 | `brain.provider` / `brain.model` | `claude` / `sonnet` | Who classifies tasks: `claude` (one lean call), `local`, or `keywords` |
+| env `OTTERRAFT_BRAIN_API_KEY` | unset | Set it and the brain classifies with this API key (billed per token) instead of a subscription account. Agents and quick answers still use subscriptions |
 | `quick.enabled` / `quick.model` / `quick.max_complexity` | true / `sonnet` / 3 | Text-only tasks get one lean Claude call instead of an agent session |
 | `local.enabled` | false | Use local models for simple text tasks |
 | `router.local_categories` | summarize, translate… | Task types that count as text-only (sent to quick or local) |
