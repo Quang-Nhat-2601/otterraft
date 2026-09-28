@@ -325,6 +325,8 @@ class Units(unittest.TestCase):
         self.assertEqual(classify("You've hit your limit · resets 3pm")[0], "quota")
         self.assertEqual(classify('API Error: 529 {"type":"overloaded_error"}'), ("transient", None))
         self.assertEqual(classify("Invalid API key · Please run /login"), ("login", None))
+        self.assertEqual(classify("Login expired · Run /login to sign in again, or re-authenticate your "
+                                  "Anthropic profile"), ("login", None))
         self.assertEqual(classify("No conversation found with session ID: x", resumed=True), ("bad_session", None))
         self.assertEqual(classify("No conversation found with session ID: x"), (None, None))
         self.assertEqual(classify("SyntaxError in foo.py"), (None, None))

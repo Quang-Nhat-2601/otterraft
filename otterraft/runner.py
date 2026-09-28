@@ -184,6 +184,8 @@ class Orchestrator:
         if task["id"] in self.routing:
             return
         if not task.get("agent"):
+            if self.db.task(task["id"]).get("agent"):
+                return  # routed since this tick's snapshot; routing again would double-bill the brain
             self.routing.add(task["id"])
             threading.Thread(target=self._route, args=(task,), daemon=True).start()
             return
@@ -370,6 +372,10 @@ class Orchestrator:
             until = self.pool.cool_down(name, res["reset_at"] or self.pool.window_reset(name), res["error"] or "")
             self.emit(tid, "account_limit", {"account": name, "until": until})
             self.notify("Account limit", f"{name} is out of usage until {time.ctime(until)}; switching account")
+        elif kind == "login" and not task.get("retries"):
+            # The CLI sometimes reports "Login expired" for a first call on a valid token: retry before parking.
+            self.db.update_task(tid, retries=1, not_before=time.time() + 15)
+            self.emit(tid, "retry_later", {"attempt": 1, "in_sec": 15, "error": (res["error"] or "")[:300]})
         elif kind == "login":
             self.pool.park_login(name)
             self.emit(tid, "account_login_required", {"account": name})

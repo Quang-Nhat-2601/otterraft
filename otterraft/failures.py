@@ -22,7 +22,7 @@ TRANSIENT_RE = re.compile(
     r"too\s+many\s+requests|\b429\b|temporarily\s+unavailable|try\s+again\s+later|high\s+demand|"
     r"ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket\s+hang\s+up|network\s+error|fetch\s+failed", re.I)
 LOGIN_RE = re.compile(
-    r"not\s+logged\s+in|please\s+(?:run\s+)?`?/?(?:claude\s+)?login|login\s+required|"
+    r"not\s+logged\s+in|please\s+(?:run\s+)?`?/?(?:claude\s+)?login|login\s+(?:required|expired)|run\s+`?/login|"
     r"invalid\s+api\s+key|authentication[_\s-](?:failed|error)|failed\s+to\s+authenticate|"
     r"(?:invalid|expired|revoked)[\s\S]{0,40}(?:bearer|oauth|access)\s+token|"
     r"(?:oauth|access)\s+token[\s\S]{0,40}(?:has\s+)?(?:expired|been\s+revoked)", re.I)
@@ -70,8 +70,8 @@ def parse_reset(text, now=None):
         try:
             from zoneinfo import ZoneInfo
             tz = ZoneInfo(m.group("tz"))
-        except Exception:
-            tz = None
+        except Exception:  # Windows ships no IANA database; the CLI's own zone is the local one anyway
+            tz = dt.timezone.utc if m.group("tz").upper() in ("UTC", "GMT", "ETC/UTC") else None
     # Without an explicit zone the CLI prints the machine's local time.
     now = (now or dt.datetime.now(dt.timezone.utc)).astimezone(tz)
     hour, minute = int(m.group("h")), int(m.group("m") or 0)

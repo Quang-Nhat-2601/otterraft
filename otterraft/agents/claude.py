@@ -180,7 +180,9 @@ class ClaudeRun:
         if self.proc.returncode and not res["error"]:
             res["error"] = "\n".join(stderr_lines[-10:]) or f"exit code {self.proc.returncode}"
         if not res["ok"]:
-            for text in (res["error"], "\n".join(stderr_lines[-5:])):
+            # CLI errors such as "Login expired" can arrive as the only assistant message, with an empty result.
+            short_reply = last_text if res["num_turns"] <= 1 else ""
+            for text in (res["error"], short_reply, "\n".join(stderr_lines[-5:])):
                 kind, reset = classify(text, resumed=bool(self.resume_session), num_turns=res["num_turns"])
                 if kind:
                     res.update(failure=kind, reset_at=reset, limit=kind == "quota")
