@@ -1,15 +1,17 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "otterraft"
 version = "0.1.0"
-description = "Run Claude Code across your accounts, unattended: auto account switching, a live dashboard, git worktrees and a self-improving coach."
+description = "Run Claude Code across your accounts, unattended. Auto-switches accounts on limits, lets Sonnet dispatch tasks, one git worktree per task, a live dashboard, and a coach that learns from every run."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dependencies = []
-keywords = ["claude-code", "ai-agents", "orchestrator", "dashboard", "llm"]
+keywords = ["claude-code", "ai-agents", "agent-orchestration", "llm", "developer-tools", "automation", "dashboard", "git-worktree", "ollama"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Environment :: Web Environment",

@@ -274,3 +274,7 @@ Code map:
 - `otterraft/learning.py`: lessons, permission suggestions, feedback
 - `otterraft/accounts.py`: account pool, cooldowns, shared config
 - `otterraft/server.py` + `otterraft/static/index.html`: API, SSE, dashboard
+
+## License
+
+[MIT](LICENSE)
