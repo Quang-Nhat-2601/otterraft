@@ -81,12 +81,8 @@ def commit(task):
     git(["add", "-A", "--", ".", *(f":(exclude,glob){p}" for p in JUNK),
          *(f":(exclude,top){n}" for n in overlay)], top)
     if git(["diff", "--cached", "--name-only"], top):
-        env = {}
-        if not _has_identity(top):
-            env = {"GIT_AUTHOR_NAME": "OtterRaft", "GIT_AUTHOR_EMAIL": "otterraft@localhost",
-                   "GIT_COMMITTER_NAME": "OtterRaft", "GIT_COMMITTER_EMAIL": "otterraft@localhost"}
         git(["commit", "-q", "--no-verify", "-m", f"otterraft: task #{task['id']} {task.get('title') or ''}"[:200]],
-            top, env=env)
+            top, env=_identity_env(top))
     files = git(["diff", "--name-only", task["base_ref"], "HEAD"], top).splitlines()
     stat = git(["diff", "--shortstat", task["base_ref"], "HEAD"], top)
     return files[:300], stat
@@ -108,13 +104,13 @@ def merge(task):
     if git(["status", "--porcelain", "--untracked-files=no"], root):
         raise WorkspaceError("your checkout has uncommitted changes; commit or stash them first")
     try:
-        git(["merge", "--no-ff", "--no-edit", task["branch"]], root)
+        git(["merge", "--no-ff", "--no-edit", task["branch"]], root, env=_identity_env(root))
     except WorkspaceError as e:
         try:
             git(["merge", "--abort"], root)
         except WorkspaceError:
             pass
-        raise WorkspaceError(f"merge conflict, nothing changed: {e}")
+        raise WorkspaceError(f"merge failed, nothing changed: {e}")
     return git(["rev-parse", "--short", "HEAD"], root)
 
 
@@ -128,8 +124,12 @@ def remove(task, delete_branch):
         git(["branch", "-D", task["branch"]], task["base_repo"])
 
 
-def _has_identity(cwd):
+def _identity_env(cwd):
+    """Commits and merge commits need a name and email; a fresh machine may have none."""
     try:
-        return bool(git(["config", "user.email"], cwd, timeout=10))
+        if git(["config", "user.email"], cwd, timeout=10):
+            return {}
     except WorkspaceError:
-        return False
+        pass
+    return {"GIT_AUTHOR_NAME": "OtterRaft", "GIT_AUTHOR_EMAIL": "otterraft@localhost",
+            "GIT_COMMITTER_NAME": "OtterRaft", "GIT_COMMITTER_EMAIL": "otterraft@localhost"}

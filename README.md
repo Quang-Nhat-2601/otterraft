@@ -26,7 +26,7 @@ Sea otters hold hands while they sleep so the current doesn't pull them apart; a
   - The router learns which worker succeeds at which kind of task.
 - **Notifies your phone** through [ntfy](https://ntfy.sh) when a task finishes, needs your answer, stalls, or an account is switched.
 
-Python 3.10+ and the standard library only. No dependencies.
+Python 3.10+ and the standard library only. No dependencies. Runs on Windows, macOS and Linux, with Claude Code installed either way (native installer or npm).
 
 ## How it compares
 
@@ -77,7 +77,7 @@ ccusage works well alongside OtterRaft if you want more statistics.
 ### 1. Install and create a config
 
 ```bash
-git clone https://github.com/<you>/otterraft && cd otterraft
+git clone https://github.com/Quang-Nhat-2601/otterraft && cd otterraft
 pip install .                 # or: pipx install .   (python -m otterraft also works without installing)
 otterraft init                # writes otterraft.json from the example
 ```
@@ -221,6 +221,7 @@ Only short error messages printed by the CLI are classified, so a task *about* r
 | `shared_config_dir` | `~/.claude` | Skills, agents, commands, plugins, CLAUDE.md, settings.json (hooks) and MCP servers here are shared with every account |
 | `notify.ntfy_url` | `""` | e.g. `https://ntfy.sh/your-secret-topic`; install the ntfy app on your phone |
 | `auto_accept` | false | Mark tasks whose verify passed as done without review |
+| `claude_bin` | `claude` | The Claude Code CLI, looked up on `PATH` (finds npm's `claude.cmd` on Windows too). A full path, or a list such as `["python", "wrapper.py"]` to run a wrapper |
 | `auth_token` | generated | The API always needs a token. Left empty, one is generated and kept in `~/.otterraft/token`; `serve` prints a link that includes it |
 
 ## The dashboard on your phone
@@ -260,7 +261,7 @@ Never expose this port to the public internet: anyone who reaches the dashboard 
 ## Development
 
 ```bash
-python3 -m unittest discover tests     # end-to-end, against a fake claude CLI and a fake Ollama
+python -m unittest discover tests      # end-to-end, against a fake claude CLI and a fake Ollama (python3 on some Linux/macOS)
 ```
 
 Code map:

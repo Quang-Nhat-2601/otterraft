@@ -454,6 +454,23 @@ class Units(unittest.TestCase):
         self.assertIn("has its own CLAUDE.md", sync_shared(cfg)[0])
         self.assertEqual((acc / "CLAUDE.md").read_text(), "mine")
 
+    @unittest.skipUnless(os.name == "nt", "npm puts a claude.cmd shim on PATH only on Windows")
+    def test_npm_style_cmd_shim_runs_and_cancels(self):
+        from unittest import mock
+        path = str(Path(__file__).parent) + os.pathsep + os.environ["PATH"]
+        with mock.patch.dict(os.environ, {"FAKE_PYTHON": sys.executable, "PATH": path}):
+            orch = self._orch(claude_bin="fake_claude")  # resolves to fake_claude.cmd, like npm's claude.cmd
+            quick = self._done(orch, orch.submit("Summarize the release notes"))
+            agent = self._done(orch, orch.submit("Fix app.py", agent_pref="claude"))
+            self.assertEqual((quick["agent"], quick["status"], agent["status"]), ("quick", "review", "review"),
+                             agent.get("error"))
+            tid = orch.submit("Summarize SLOW notes", agent_pref="quick")
+            wait_for(lambda: orch.db.task(tid)["status"] == "running" and tid in orch.active)
+            t0 = time.time()
+            orch.cancel(tid)
+            wait_for(lambda: tid not in orch.busy)
+            self.assertLess(time.time() - t0, 1.5)  # the CLI under cmd.exe died too, closing our pipes
+
     def test_cli_login_errors_are_recognised(self):
         from otterraft.agents.claude import ClaudeRun
         tmp = tempfile.mkdtemp()

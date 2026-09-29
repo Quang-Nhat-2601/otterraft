@@ -373,7 +373,7 @@ class Orchestrator:
         self.emit(tid, "start", {"agent": "quick", "account": account["name"], "model": q.get("model")})
         system = "\n\n".join(x for x in (QUICK_SYSTEM, self._lessons_block(task)) if x)
         res = quick_call(self.cfg, account, system, prompt, q.get("model"), timeout=q.get("timeout_sec", 300),
-                         on_start=lambda p: self._track(tid, p.kill))
+                         on_start=lambda stop: self._track(tid, stop))
         if tid in self.cancelled:
             return
         cur = self.db.task(tid)

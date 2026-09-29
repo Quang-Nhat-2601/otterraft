@@ -12,9 +12,26 @@ from ..failures import classify
 
 
 def cli(cfg):
-    """claude_bin as an argv prefix; a list lets Windows run a script, e.g. [python, fake_claude.py]."""
+    """claude_bin as an argv prefix. A name is looked up on PATH first: on Windows, process
+    creation alone finds only .exe, not the claude.cmd an npm install puts there. A list runs
+    a wrapper as the CLI, e.g. [python, fake_claude.py]."""
     b = cfg["claude_bin"]
-    return list(b) if isinstance(b, list) else [b]
+    return list(b) if isinstance(b, list) else [shutil.which(b) or b]
+
+
+def kill_tree(proc):
+    """Stop the CLI and everything it started. On Windows an npm install runs claude.cmd, which
+    runs node: killing cmd.exe alone leaves node running with our pipes still open."""
+    if proc.poll() is not None:
+        return
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True)
+        return
+    proc.terminate()
+    try:
+        proc.wait(5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
 
 
 def account_env(account):
@@ -100,12 +117,8 @@ class ClaudeRun:
 
     def cancel(self):
         self.cancelled = True
-        if self.proc and self.proc.poll() is None:
-            self.proc.terminate()
-            try:
-                self.proc.wait(5)
-            except subprocess.TimeoutExpired:
-                self.proc.kill()
+        if self.proc:
+            kill_tree(self.proc)
 
     def run(self):
         system_file = _prompt_file(self.cfg, self.system_append) \
@@ -133,7 +146,7 @@ class ClaudeRun:
             res["error"] = f"Could not start the Claude CLI ({self.cfg['claude_bin']}): {e}"
             return res
         if self.cancelled:  # cancel() ran before there was a process to stop
-            self.proc.kill()
+            kill_tree(self.proc)
 
         def pump_stderr():
             for line in self.proc.stderr:
@@ -282,7 +295,7 @@ def quick_call(cfg, account, system, prompt, model, timeout=120, on_start=None):
     """One lean Claude call on a subscription account: no tools, skills, MCP or CLAUDE.md, and
     our own short system prompt instead of Claude Code's. About 7K input tokens (measured)
     against 25K+ for even a trivial agent session, so routing and short text answers cost little.
-    Returns the same result shape as ClaudeRun.run(). on_start(proc) lets a caller kill it."""
+    Returns the same result shape as ClaudeRun.run(). on_start(stop) hands a caller a way to kill it."""
     system_file = _prompt_file(cfg, system)
     try:
         return _quick_call(cfg, account, system_file, prompt, model, timeout, on_start)
@@ -312,11 +325,11 @@ def _quick_call(cfg, account, system_file, prompt, model, timeout, on_start):
         res["error"] = f"Could not start the Claude CLI ({cfg['claude_bin']}): {e}"
         return res
     if on_start:
-        on_start(p)
+        on_start(lambda: kill_tree(p))
     try:
         stdout, stderr = p.communicate(prompt, timeout=timeout)
     except subprocess.TimeoutExpired:
-        p.kill()
+        kill_tree(p)
         p.communicate()
         res.update(error=f"timed out after {timeout}s", failure="transient")
         return res
