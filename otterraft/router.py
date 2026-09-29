@@ -1,6 +1,7 @@
 """The "brain": decides which agent gets a task, and learns from outcomes via success stats."""
 import os
 import re
+import time
 
 # Keyword rules, the last fallback when neither Claude nor a local model can classify a task.
 # They match English and Vietnamese on purpose: users write tasks in their own language.
@@ -56,6 +57,7 @@ class Router:
         self.db = db
         self.local = local
         self.pool = pool
+        self.key_off_until = 0  # OTTERRAFT_BRAIN_API_KEY failed: skip it until then
 
     def classify(self, prompt, task_id=None):
         provider = self.cfg["brain"].get("provider", "claude")
@@ -75,7 +77,7 @@ class Router:
     def _claude_classify(self, prompt, task_id):
         from .agents.claude import parse_json_answer, quick_call
         # A dedicated variable: a plain ANTHROPIC_API_KEY would also switch the user's own sessions to API billing.
-        key = os.environ.get("OTTERRAFT_BRAIN_API_KEY")
+        key = os.environ.get("OTTERRAFT_BRAIN_API_KEY") if time.time() >= self.key_off_until else None
         account = {"name": "brain-api", "use_api_key": True, "env": {"ANTHROPIC_API_KEY": key}} \
             if key else self.pool.best_available()
         if not account:
@@ -89,13 +91,20 @@ class Router:
                           duration_ms=res["duration_ms"], ok=1 if res["ok"] else 0, category="routing")
         if not res["ok"]:
             if key:
-                pass  # the API key isn't a pool account: nothing to cool down or park
-            elif res["failure"] == "quota":
+                # A bad or empty key would otherwise fail every task silently: say so, use the
+                # subscription accounts for a while, and classify this task with one of them.
+                self.key_off_until = time.time() + 600
+                print(f"[otterraft] OTTERRAFT_BRAIN_API_KEY failed ({(res['error'] or '')[:200]}); "
+                      "the brain uses subscription accounts for 10 minutes", flush=True)
+                return self._claude_classify(prompt, task_id)
+            if res["failure"] == "quota":
                 self.pool.cool_down(account["name"], res["reset_at"] or self.pool.window_reset(account["name"]),
                                     res["error"] or "")
             elif res["failure"] == "login":
                 self.pool.login_failed(account["name"])
             return None
+        if not key:
+            self.pool.login_ok(account["name"])
         out = parse_json_answer(res["text"])
         return self._clean(out, f"claude {res['model']}") if isinstance(out, dict) and out.get("category") else None
 

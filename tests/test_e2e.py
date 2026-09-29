@@ -134,7 +134,10 @@ class E2E(unittest.TestCase):
         self.assertEqual(t["cached_tokens"], 500)
         resumed = [c for c in self.calls() if "--resume" in c["args"]]
         self.assertTrue(resumed)
-        self.assertTrue(all("--append-system-prompt" not in c["args"] for c in resumed))
+        self.assertTrue(all("--append-system-prompt-file" not in c["args"] for c in resumed))
+        fresh = [c for c in self.calls() if "stream-json" in c["args"] and "--resume" not in c["args"]]
+        self.assertTrue(all("--append-system-prompt-file" in c["args"] for c in fresh))  # never on the command line
+        self.assertFalse(any((Path(self.cfg["data_dir"]) / "prompts").iterdir()))  # temp files cleaned up
         kinds = [e["kind"] for e in self.api(f"/api/tasks/{tid}/events")]
         for k in ("routed", "account_limit", "handoff", "todos", "tool", "verify", "finished", "learned"):
             self.assertIn(k, kinds)
@@ -268,6 +271,7 @@ class Units(unittest.TestCase):
         tmp = tempfile.mkdtemp()
         cfg_path = Path(tmp) / "o.json"
         cfg_path.write_text(json.dumps({"data_dir": tmp + "/data", "claude_bin": FAKE_CLAUDE,
+                                        "shared_config_dir": tmp + "/shared",  # never the real ~/.claude
                                         "accounts": [{"name": "a", "config_dir": tmp + "/a"}], **cfg}))
         orch = Orchestrator(config.load(cfg_path), DB(Path(tmp) / "o.db"), Bus())
         orch.start()
@@ -334,7 +338,14 @@ class Units(unittest.TestCase):
         self.assertEqual(classify(prose), (None, None))
         now = dt.datetime(2026, 9, 27, 10, 0, tzinfo=dt.timezone.utc)
         at = lambda t: dt.datetime.fromtimestamp(parse_reset(t, now), dt.timezone.utc)
-        self.assertEqual(at("resets 3pm (Asia/Ho_Chi_Minh)"), dt.datetime(2026, 9, 28, 8, 0, tzinfo=dt.timezone.utc))
+        try:
+            from zoneinfo import ZoneInfo
+            ZoneInfo("Asia/Ho_Chi_Minh")
+            zone_known = True
+        except Exception:  # no IANA database (Windows): parse_reset then reads it as local time
+            zone_known = False
+        if zone_known or dt.datetime.now().astimezone().utcoffset() == dt.timedelta(hours=7):
+            self.assertEqual(at("resets 3pm (Asia/Ho_Chi_Minh)"), dt.datetime(2026, 9, 28, 8, 0, tzinfo=dt.timezone.utc))
         self.assertEqual(at("resets 11:30am (UTC)"), dt.datetime(2026, 9, 27, 11, 30, tzinfo=dt.timezone.utc))
         self.assertEqual(at("resets Oct 3, 9:30am (UTC)"), dt.datetime(2026, 10, 3, 9, 30, tzinfo=dt.timezone.utc))
         self.assertIsNone(parse_reset("resets soon", now))
@@ -344,6 +355,7 @@ class Units(unittest.TestCase):
         cfg_path = Path(tmp) / "o.json"
         cfg_path.write_text(json.dumps({
             "data_dir": tmp + "/data", "claude_bin": FAKE_CLAUDE, "local": {"enabled": False},
+            "shared_config_dir": tmp + "/shared",
             "accounts": [{"name": "old", "config_dir": tmp + "/loggedout", "priority": 1},
                          {"name": "ok", "config_dir": tmp + "/ok", "priority": 2}]}))
         orch = Orchestrator(config.load(cfg_path), DB(Path(tmp) / "o.db"), Bus())
@@ -376,6 +388,71 @@ class Units(unittest.TestCase):
         st = pool.state("a")
         self.assertIn("login check failed", st["last_error"])
         self.assertLess(st["cooldown_until"], time.time() + 60)
+
+    def test_login_strikes_reset_on_success_and_relogin(self):
+        from otterraft.accounts import AccountPool
+        pool = AccountPool({"accounts": [{"name": "a"}], "claude": {"default_cooldown_min": 60}},
+                           DB(Path(tempfile.mkdtemp()) / "x.db"))
+        later = lambda: pool.login_rest_until.update(a=time.time() - 700)  # rest and 10-min window over
+        self.assertFalse(pool.login_failed("a"))
+        later()
+        self.assertFalse(pool.login_failed("a"))
+        later()
+        self.assertTrue(pool.login_failed("a"))  # third strike without a successful call in between
+        # `otterraft login` runs in another process and only clears the DB row
+        pool.db.execute("UPDATE account_state SET cooldown_until=0, last_error=NULL WHERE name='a'")
+        self.assertFalse(pool.login_failed("a"))
+        pool.login_ok("a")  # a call authenticated: the strikes are forgotten
+        self.assertIsNone(pool.state("a")["last_error"])
+        for _ in range(2):
+            later()
+            self.assertFalse(pool.login_failed("a"))
+
+    def test_broken_brain_key_falls_back_to_the_pool(self):
+        from unittest import mock
+        from otterraft.router import Router
+        used = []
+
+        def fake_quick_call(cfg, account, *a, **k):
+            used.append(account["name"])
+            if account["name"] == "brain-api":
+                return {"ok": False, "error": "Invalid API key", "failure": "login", "reset_at": None,
+                        "model": "sonnet", "cost_usd": 0, "input_tokens": 0, "output_tokens": 0,
+                        "cached_tokens": 0, "duration_ms": 0}
+            return {"ok": True, "text": '{"category": "summarize", "complexity": 1}', "model": "sonnet",
+                    "cost_usd": 0, "input_tokens": 0, "output_tokens": 0, "cached_tokens": 0, "duration_ms": 0}
+        pool = mock.Mock()
+        pool.best_available.return_value = {"name": "sub"}
+        router = Router({"brain": {}, "router": {}}, mock.Mock(), mock.Mock(enabled=False), pool)
+        with mock.patch.dict(os.environ, {"OTTERRAFT_BRAIN_API_KEY": "sk-bad"}), \
+                mock.patch("otterraft.agents.claude.quick_call", fake_quick_call), \
+                mock.patch("builtins.print"):
+            self.assertEqual(router.classify("Summarize this")["source"], "claude sonnet")
+            router.classify("Summarize that")
+        self.assertEqual(used, ["brain-api", "sub", "sub"])  # the bad key is tried once, not per task
+        pool.login_failed.assert_not_called()  # the key's failure is not the account's
+
+    def test_broken_hard_link_is_relinked_when_the_shared_file_is_newer(self):
+        from otterraft.accounts import sync_shared
+        tmp = Path(tempfile.mkdtemp())
+        shared, acc = tmp / "shared", tmp / "acc"
+        shared.mkdir()
+        (shared / "CLAUDE.md").write_text("v1")
+        cfg = {"shared_config_dir": str(shared), "accounts": [{"name": "b", "config_dir": str(acc)}]}
+        sync_shared(cfg)
+        # An editor saves the shared file by replacing it, which splits a hard link.
+        (shared / "CLAUDE.md.tmp").write_text("v2")
+        os.replace(shared / "CLAUDE.md.tmp", shared / "CLAUDE.md")
+        os.utime(shared / "CLAUDE.md", (time.time() + 10,) * 2)
+        line = sync_shared(cfg)[0]
+        self.assertEqual((acc / "CLAUDE.md").read_text(), "v2", line)
+        self.assertNotIn("left untouched", line)
+        # The account saved its own copy later: that is the account's change, so leave it.
+        (acc / "CLAUDE.md").unlink()
+        (acc / "CLAUDE.md").write_text("mine")
+        os.utime(acc / "CLAUDE.md", (time.time() + 20,) * 2)
+        self.assertIn("has its own CLAUDE.md", sync_shared(cfg)[0])
+        self.assertEqual((acc / "CLAUDE.md").read_text(), "mine")
 
     def test_cli_login_errors_are_recognised(self):
         from otterraft.agents.claude import ClaudeRun

@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import threading
 import time
+import uuid
 from pathlib import Path
 
 from ..failures import classify
@@ -28,6 +29,16 @@ def account_env(account):
     for k, v in (account.get("env") or {}).items():
         env[k] = v
     return env
+
+
+def _prompt_file(cfg, text):
+    """System prompts go through a file too: Windows caps a whole command line at ~32K chars,
+    and the lessons block grows. The caller deletes the file once the CLI has exited."""
+    d = Path(cfg["data_dir"]) / "prompts"
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / f"{uuid.uuid4().hex}.md"
+    f.write_text(text, encoding="utf-8")
+    return f
 
 
 def _config_root(account):
@@ -66,7 +77,7 @@ class ClaudeRun:
         self.proc = None
         self.cancelled = False
 
-    def command(self):
+    def command(self, system_file=None):
         c = self.cfg["claude"]
         # The prompt goes through stdin: Windows caps a whole command line at ~32K chars.
         cmd = [*cli(self.cfg), "-p", "--output-format", "stream-json",
@@ -83,8 +94,8 @@ class ClaudeRun:
             # The session already carries its system prompt; sending it again costs thousands
             # of tokens per resume and changes nothing.
             cmd += ["--resume", self.resume_session]
-        elif self.system_append:
-            cmd += ["--append-system-prompt", self.system_append]
+        elif system_file:
+            cmd += ["--append-system-prompt-file", str(system_file)]
         return cmd + list(c.get("extra_args") or []) + self.extra_args
 
     def cancel(self):
@@ -97,6 +108,15 @@ class ClaudeRun:
                 self.proc.kill()
 
     def run(self):
+        system_file = _prompt_file(self.cfg, self.system_append) \
+            if self.system_append and not self.resume_session else None
+        try:
+            return self._run(system_file)
+        finally:
+            if system_file:
+                system_file.unlink(missing_ok=True)
+
+    def _run(self, system_file):
         res = {"ok": False, "session_id": self.resume_session, "text": "", "cost_usd": 0.0,
                "input_tokens": 0, "output_tokens": 0, "cached_tokens": 0, "duration_ms": 0,
                "num_turns": 0, "failure": None, "limit": False, "reset_at": None, "error": None,
@@ -106,7 +126,7 @@ class ClaudeRun:
         stderr_lines = []
         try:
             self.proc = subprocess.Popen(
-                self.command(), cwd=self.workdir or None, env=account_env(self.account),
+                self.command(system_file), cwd=self.workdir or None, env=account_env(self.account),
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 text=True, encoding="utf-8", errors="replace", bufsize=1)
         except OSError as e:
@@ -114,17 +134,22 @@ class ClaudeRun:
             return res
         if self.cancelled:  # cancel() ran before there was a process to stop
             self.proc.kill()
-        try:
-            self.proc.stdin.write(self.prompt)
-            self.proc.stdin.close()
-        except OSError:
-            pass  # the CLI exited early; its stderr says why
 
         def pump_stderr():
             for line in self.proc.stderr:
                 stderr_lines.append(line.rstrip())
                 del stderr_lines[:-50]
+
+        def feed_stdin():
+            # Its own thread: a prompt bigger than the pipe buffer would block here while the
+            # CLI blocks writing stdout that nobody reads yet.
+            try:
+                self.proc.stdin.write(self.prompt)
+                self.proc.stdin.close()
+            except OSError:
+                pass  # the CLI exited early; its stderr says why
         threading.Thread(target=pump_stderr, daemon=True).start()
+        threading.Thread(target=feed_stdin, daemon=True).start()
 
         last_text, cli_error, n_texts, empty_result = "", "", 0, False
         tasks = {}  # for TaskCreate/TaskUpdate style progress
@@ -255,9 +280,17 @@ def _text_of(content):
 
 def quick_call(cfg, account, system, prompt, model, timeout=120, on_start=None):
     """One lean Claude call on a subscription account: no tools, skills, MCP or CLAUDE.md, and
-    our own short system prompt instead of Claude Code's. About 1K tokens of context instead of
-    ~40K for a default `claude -p`, so routing and short text answers cost almost no quota.
+    our own short system prompt instead of Claude Code's. About 7K input tokens (measured)
+    against 25K+ for even a trivial agent session, so routing and short text answers cost little.
     Returns the same result shape as ClaudeRun.run(). on_start(proc) lets a caller kill it."""
+    system_file = _prompt_file(cfg, system)
+    try:
+        return _quick_call(cfg, account, system_file, prompt, model, timeout, on_start)
+    finally:
+        system_file.unlink(missing_ok=True)
+
+
+def _quick_call(cfg, account, system_file, prompt, model, timeout, on_start):
     res = {"ok": False, "text": "", "error": None, "failure": None, "reset_at": None, "limit": False,
            "cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "cached_tokens": 0,
            "duration_ms": 0, "num_turns": 0, "session_id": None, "model": model,
@@ -266,7 +299,7 @@ def quick_call(cfg, account, system, prompt, model, timeout=120, on_start=None):
     cwd = Path(cfg["data_dir"]) / "brain"
     cwd.mkdir(parents=True, exist_ok=True)
     cmd = [*cli(cfg), "-p", "--output-format", "json", "--max-turns", "1",
-           "--tools", "", "--system-prompt", system, "--disable-slash-commands",
+           "--tools", "", "--system-prompt-file", str(system_file), "--disable-slash-commands",
            "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}']
     if model:
         cmd += ["--model", model]

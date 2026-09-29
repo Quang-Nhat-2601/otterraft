@@ -13,7 +13,8 @@ class AccountPool:
         self.db = db
         self.lock = threading.Lock()
         self.running = {}  # account name -> count
-        self.login_rest_until = {}  # account name -> end of the rest after a first login failure
+        self.login_rest_until = {}  # account name -> end of the rest after a login failure
+        self.login_strikes = {}  # account name -> login failures since the last successful call
 
     @property
     def accounts(self):
@@ -78,19 +79,33 @@ class AccountPool:
 
     def login_failed(self, name):
         """The CLI sometimes reports "Login expired" once on a valid token: rest the account 15 s,
-        and park it on a login failure within 10 minutes after that rest. Failures during the rest
-        are the same stale token hit by concurrent calls, not a second strike. Returns True when parked."""
+        and park it on a login failure within 10 minutes after that rest, or on the third one with
+        no successful call in between. Failures during the rest are the same stale token hit by
+        concurrent calls, not another strike. Returns True when parked."""
         now = time.time()
         with self.lock:  # the DB writes too: a late 15 s rest must never overwrite a park
+            if not (self.state(name).get("last_error") or "").startswith("login"):
+                # `otterraft login` (another process) or "Use again now" cleared it: start over.
+                self.login_rest_until.pop(name, None)
+                self.login_strikes.pop(name, None)
             rest_end = self.login_rest_until.get(name, 0)
             if now < rest_end:
                 return False
-            if now < rest_end + 600:
+            strikes = self.login_strikes.get(name, 0) + 1
+            if now < rest_end + 600 or strikes >= 3:
                 self.park_login(name)
                 return True
-            self.login_rest_until[name] = now + 15
-            self.cool_down(name, now + 15, "login check failed once; retrying shortly")
+            self.login_rest_until[name], self.login_strikes[name] = now + 15, strikes
+            self.cool_down(name, now + 15, "login check failed; retrying shortly")
             return False
+
+    def login_ok(self, name):
+        """A call on this account authenticated: forget its earlier login failures."""
+        with self.lock:
+            if self.login_strikes.pop(name, None) is not None:
+                self.login_rest_until.pop(name, None)
+                self.db.execute("UPDATE account_state SET last_error=NULL WHERE name=? "
+                                "AND last_error LIKE 'login check%'", (name,))
 
     def acquire(self, exclude=()):
         """Reserve a slot on the best account. Returns the account dict or None."""
@@ -114,7 +129,6 @@ class AccountPool:
         return until
 
     def reset(self, name):
-        self.login_rest_until.pop(name, None)
         self.db.execute("UPDATE account_state SET cooldown_until=0, last_error=NULL WHERE name=?", (name,))
 
     def next_free_at(self):
@@ -146,6 +160,13 @@ def _link_without_symlink_rights(s, d):
         (shutil.copytree if s.is_dir() else shutil.copy2)(s, d)
 
 
+def _link(s, d):
+    try:
+        d.symlink_to(s, target_is_directory=s.is_dir())
+    except OSError:
+        _link_without_symlink_rights(s, d)
+
+
 def sync_shared(cfg, dry_run=False):
     """Link the shared config into each account's CLAUDE_CONFIG_DIR, so every account sees the
     same skills, CLAUDE.md, hooks, plugins and MCP servers. Never overwrites a real file or
@@ -160,29 +181,49 @@ def sync_shared(cfg, dry_run=False):
         dst = Path(acc["config_dir"])
         if dst.resolve() == src.resolve():
             continue
-        linked, conflicts, missing = [], [], []
+        # What OtterRaft linked here, so a hard link that broke can be told from the account's own file.
+        manifest = dst / ".otterraft-links.json"
+        try:
+            managed = set(json.loads(manifest.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            managed = set()
+        before = set(managed)
+        linked, conflicts, missing, relinked = [], [], [], []
         for item in SHARED_ITEMS:
             s, d = src / item, dst / item
             if not s.exists():
                 continue
             if d.exists() and os.path.samefile(d, s):  # symlink, junction or hard link
                 linked.append(item)
+                managed.add(item)
+            elif item in managed and s.is_file() and d.is_file() and s.stat().st_mtime > d.stat().st_mtime:
+                # A hard link splits when either side is saved by replacing the file. The shared
+                # copy is newer, so it was the one saved: link again, keeping the old copy.
+                if dry_run:
+                    missing.append(item)
+                else:
+                    os.replace(d, d.with_name(d.name + ".otterraft-bak"))
+                    _link(s, d)
+                    relinked.append(item)
+                    linked.append(item)
             elif d.exists() or d.is_symlink():
                 conflicts.append(item)
             elif dry_run:
                 missing.append(item)
             else:
                 dst.mkdir(parents=True, exist_ok=True)
-                try:
-                    d.symlink_to(s, target_is_directory=s.is_dir())
-                except OSError:
-                    _link_without_symlink_rights(s, d)
+                _link(s, d)
                 linked.append(item)
+                managed.add(item)
+        if managed != before and not dry_run:
+            manifest.write_text(json.dumps(sorted(managed)), encoding="utf-8")
         mcp = _sync_mcp(src, dst, dry_run)
         mark = "ok" if not missing and not conflicts else "??"
         line = f"[{mark}] account {acc['name']}: shared {', '.join(linked) or 'nothing'}"
         if mcp:
             line += f"; MCP servers: {mcp}"
+        if relinked:
+            line += f"; relinked {', '.join(relinked)} (the stale copy is kept as *.otterraft-bak)"
         if missing:
             line += f"; not linked yet: {', '.join(missing)} (run serve/login to link)"
         if conflicts:

@@ -86,7 +86,7 @@ def cmd_login(args, cfg):
     print(f"Starting Claude Code for account '{acc['name']}'. Type /login, sign in, then /exit.")
     subprocess.call(cli(cfg), env=env)
     open_db(cfg).execute("UPDATE account_state SET cooldown_until=0, last_error=NULL WHERE name=? "
-                         "AND last_error LIKE 'login required%'", (acc["name"],))
+                         "AND last_error LIKE 'login%'", (acc["name"],))
     for line in sync_shared(cfg):
         print(line)
 

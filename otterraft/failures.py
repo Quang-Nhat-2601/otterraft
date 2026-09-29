@@ -70,8 +70,10 @@ def parse_reset(text, now=None):
         try:
             from zoneinfo import ZoneInfo
             tz = ZoneInfo(m.group("tz"))
-        except Exception:  # Windows ships no IANA database; the CLI's own zone is the local one anyway
-            tz = dt.timezone.utc if m.group("tz").upper() in ("UTC", "GMT", "ETC/UTC") else None
+        except Exception:
+            # Windows ships no IANA database. The CLI names the zone of the machine it runs on,
+            # which is this one, so local time is right for any zone but UTC.
+            tz = dt.timezone.utc if m.group("tz").upper() in ("UTC", "ETC/UTC") else None
     # Without an explicit zone the CLI prints the machine's local time.
     now = (now or dt.datetime.now(dt.timezone.utc)).astimezone(tz)
     hour, minute = int(m.group("h")), int(m.group("m") or 0)

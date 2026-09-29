@@ -8,7 +8,7 @@ import urllib.request
 from pathlib import Path
 
 from . import workspace
-from .accounts import AccountPool
+from .accounts import AccountPool, sync_shared
 from .agents.claude import ClaudeRun, handoff_session, quick_call
 from .agents.local import LocalLLM
 from .agents.report import REPORT_INSTRUCTIONS, parse_report, strip_report
@@ -41,6 +41,7 @@ class Orchestrator:
         self.stall_flagged = set()
         self.routing = set()      # task ids being classified off the scheduler thread
         self.cancelled = set()    # task ids cancelled while a worker still holds them
+        self.synced_at = time.time()  # `serve` syncs the shared config itself at startup
         # Tasks left "running" by a previous crash go back to the queue.
         db.execute("UPDATE tasks SET status='queued' WHERE status='running'")
 
@@ -170,6 +171,9 @@ class Orchestrator:
             self._try_start(task)
         if self.coach.due(now):
             self.run_coach()
+        if now - self.synced_at > 60:  # re-link shared files whose hard link broke while serving
+            self.synced_at = now
+            sync_shared(self.cfg)
 
     def _route(self, task):
         """Classification may call a local LLM (seconds), so it runs off the scheduler thread."""
@@ -343,7 +347,9 @@ class Orchestrator:
         self.learner.record_permission_denials(tid, res["permission_denials"])
         if res["permission_denials"]:
             self.emit(tid, "permission_denials", {"items": res["permission_denials"][:20]})
-        if not res["ok"] and self._recover(self.db.task(tid), account, res, message):
+        if res["ok"]:
+            self.pool.login_ok(account["name"])
+        elif self._recover(self.db.task(tid), account, res, message):
             return
         self._finish(self.db.task(tid), res["ok"], res["text"], res["error"])
 
@@ -384,6 +390,7 @@ class Orchestrator:
                           category=task.get("category"))
         self.emit(tid, "text", {"text": res["text"][:4000]} if res["ok"] else {"text": f"error: {res['error']}"})
         if res["ok"]:
+            self.pool.login_ok(account["name"])
             return self._finish(self.db.task(tid), True, res["text"], None)
         if self._recover(self.db.task(tid), account, res, message, resumable=False):
             return

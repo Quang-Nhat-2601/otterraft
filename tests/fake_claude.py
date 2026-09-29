@@ -46,7 +46,8 @@ if "loggedout" in str(cfg_dir):
     fail("Invalid API key · Please run /login")
 
 if args[args.index("--output-format") + 1] == "json":
-    system = args[args.index("--system-prompt") + 1] if "--system-prompt" in args else ""
+    system = Path(args[args.index("--system-prompt-file") + 1]).read_text(encoding="utf-8") \
+        if "--system-prompt-file" in args else ""
     low = prompt.lower()
     if "dispatcher" in system:
         text_task = any(w in low for w in ("summarize", "translate", "commit message"))

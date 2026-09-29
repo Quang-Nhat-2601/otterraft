@@ -8,9 +8,9 @@ Sea otters hold hands while they sleep so the current doesn't pull them apart; a
 
 - **Switches accounts for you.** Use several Claude Code accounts, each with its own login. When an account's 5-hour window gets close to full (90% by default), or hits its limit, OtterRaft moves to the next account. A task that was mid-way **carries its session over and continues** instead of starting again.
 - **Runs unattended.** Claude runs headless in `--permission-mode auto`, so it never stops to ask for permission. Tools that get blocked are collected as *permission suggestions*: approve one once and it is not blocked again.
-- **Lets Claude dispatch.** Claude Sonnet classifies each task with one lean call (about 2.5K tokens and 2–3 seconds), then sends it to the right worker:
+- **Lets Claude dispatch.** Claude Sonnet classifies each task with one lean call (about 7K input tokens and 2–3 seconds, measured), then sends it to the right worker:
   - **Claude agent** for work that edits code or runs commands. Tasks rated complexity ≤3 run on Sonnet, which saves your stronger model's quota for hard work.
-  - **Claude quick answer** for text-only work such as summaries, translations and commit messages: about 2.5K tokens instead of the 40K+ a full agent session costs.
+  - **Claude quick answer** for text-only work such as summaries, translations and commit messages: about 7K input tokens instead of the 25K+ that even a trivial agent session costs.
   - **Local model** (optional, off by default) if you want simple work to stay on your machine.
 - **Shows a live dashboard.** Watch each agent's tool calls and commands as they happen, follow progress through the agent's own todo list, and see usage and success rates per account and per model.
 - **Reports after every task.** The report says how the agent understood the request, what it produced, which files changed, and the result of your verify command. It also includes a **checklist of test cases for you to try**.
@@ -52,7 +52,7 @@ ccusage works well alongside OtterRaft if you want more statistics.
 ┌────────────────────────────┴──────────────▼─────────────────────────┐
 │ OtterRaft (otterraft serve)                                         │
 │                                                                     │
-│  Brain: Sonnet, one lean call (no tools/skills/MCP, ~2.5K tokens)   │
+│  Brain: Sonnet, one lean call (no tools/skills/MCP, ~7K tokens)     │
 │     fallback: local model → keyword rules; + learned success stats  │
 │     │                                                               │
 │     ├── Claude agent ── Account pool ── acc1 (CLAUDE_CONFIG_DIR=…)  │
@@ -104,7 +104,7 @@ otterraft login work
 
 Agents under OtterRaft are full Claude Code sessions. They **use your skills** from `~/.claude/skills` and the project's `.claude/skills`, and they read your CLAUDE.md, hooks, plugins and MCP servers too.
 
-Claude Code only reads skills and settings from an account's own config directory. So `serve` and `login` link `skills/`, `agents/`, `commands/`, `plugins/`, `CLAUDE.md` and `settings.json` from `~/.claude` into every account, and copy your `mcpServers` (the login itself is never touched). If an account already has its own copy of one of these, OtterRaft leaves it alone and `doctor` tells you, so you can merge by hand.
+Claude Code only reads skills and settings from an account's own config directory. So `serve` and `login` link `skills/`, `agents/`, `commands/`, `plugins/`, `CLAUDE.md` and `settings.json` from `~/.claude` into every account, and copy your `mcpServers` (the login itself is never touched). If an account already has its own copy of one of these, OtterRaft leaves it alone and `doctor` tells you, so you can merge by hand. On Windows without symlink rights, files are shared as hard links, which split when an editor saves the shared file by replacing it; while `serve` runs it links them again within a minute and keeps the stale copy as `*.otterraft-bak`.
 
 ### 4. Check and run
 
@@ -115,7 +115,7 @@ otterraft serve               # prints the dashboard link, including its access 
 
 ### Optional: local models
 
-**You don't need them.** Sonnet dispatches tasks and answers text-only ones for very little quota: a classification is about 2.5K tokens, under 1% of a typical coding task. On a CPU-only machine it is also faster than a local model (2–3 s against roughly 5–30 s) and doesn't take 13 GB of RAM.
+**You don't need them.** Sonnet dispatches tasks and answers text-only ones for very little quota: a classification is about 7K input tokens, a small fraction of a coding task. On a CPU-only machine it is also faster than a local model (2–3 s against roughly 5–30 s) and doesn't take 13 GB of RAM.
 
 Turn local models on (`"local": {"enabled": true}`) when you need data to stay on your machine, need to work offline, or have lots of repetitive text work. They only do simple, text-only work: summaries, translations, explanations, commit messages, regexes. Anything that reads or changes code still goes to Claude.
 
@@ -190,7 +190,7 @@ If a project needs dependencies installed before tests can run, set `workspace.s
 |---|---|
 | Provider overloaded (529/503), short 429, network error | Waits 30 s, 60 s, 120 s… and retries the same task (up to 5 times) without switching accounts |
 | Account out of usage ("hit your limit", "usage limit reached") | Rests the account until its reset time (read from the message or its usage data), hands the session to another account and continues |
-| Account logged out / token expired | Sets the account aside and tells you to run `otterraft login <name>` (which puts it back); the task moves to another account |
+| Account logged out / token expired | Rests the account 15 s first (the CLI sometimes reports this once on a valid token). A second failure within 10 minutes, or a third without a successful call in between, sets it aside and tells you to run `otterraft login <name>` (which puts it back); the task moves to another account |
 | A session cannot be resumed | Drops that session and starts the task over, keeping your message |
 
 Only short error messages printed by the CLI are classified, so a task *about* rate limiting that fails never locks an account by mistake.
@@ -208,7 +208,7 @@ Only short error messages printed by the CLI are classified, so a task *about* r
 | `claude.model` | `""` | Model for hard agent tasks (`""` = the account's default) |
 | `claude.light_model` / `light_max_complexity` | `sonnet` / 3 | Agent tasks rated at most this complexity run on the light model |
 | `brain.provider` / `brain.model` | `claude` / `sonnet` | Who classifies tasks: `claude` (one lean call), `local`, or `keywords` |
-| env `OTTERRAFT_BRAIN_API_KEY` | unset | Set it and the brain classifies with this API key (billed per token) instead of a subscription account. Agents and quick answers still use subscriptions |
+| env `OTTERRAFT_BRAIN_API_KEY` | unset | Set it and the brain classifies with this API key (billed per token) instead of a subscription account. Agents and quick answers still use subscriptions, and never see this variable. If the key fails, the brain says so on the `serve` console and uses subscription accounts for 10 minutes |
 | `quick.enabled` / `quick.model` / `quick.max_complexity` | true / `sonnet` / 3 | Text-only tasks get one lean Claude call instead of an agent session |
 | `local.enabled` | false | Use local models for simple text tasks |
 | `router.local_categories` | summarize, translate… | Task types that count as text-only (sent to quick or local) |
