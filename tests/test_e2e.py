@@ -22,7 +22,7 @@ from otterraft.router import heuristic_classify  # noqa: E402
 from otterraft.runner import Orchestrator  # noqa: E402
 from otterraft.server import serve  # noqa: E402
 
-FAKE_CLAUDE = str(Path(__file__).with_name("fake_claude.py"))
+FAKE_CLAUDE = [sys.executable, str(Path(__file__).with_name("fake_claude.py"))]  # Windows can't exec a .py
 
 
 class FakeOllama(BaseHTTPRequestHandler):
@@ -119,7 +119,7 @@ class E2E(unittest.TestCase):
 
     def test_claude_task_switches_account_and_hands_off(self):
         tid = self.api("/api/tasks", {"prompt": "Fix the login bug in app.py and add a test",
-                                      "workdir": self.workdir, "verify_cmd": "true"})["id"]
+                                      "workdir": self.workdir, "verify_cmd": "exit 0"})["id"]
         t = wait_for(lambda: (lambda t: t if t["status"] in ("review", "failed") else None)(
             self.api(f"/api/tasks/{tid}")))
         self.assertEqual(t["status"], "review", t.get("error"))
@@ -352,11 +352,105 @@ class Units(unittest.TestCase):
             tid = orch.submit("Fix app.py", agent_pref="claude")
             t = wait_for(lambda: (lambda t: t if t["status"] in ("review", "failed") else None)(orch.db.task(tid)))
             self.assertEqual((t["status"], t["account"]), ("review", "ok"), t.get("error"))
+            # One login failure (the brain's call) only rests the account; a second one parks it.
+            self.assertIn("login check failed", orch.pool.state("old")["last_error"])
+            orch.pool.login_rest_until["old"] = time.time() - 1  # the 15 s rest is over
+            self.assertTrue(orch.pool.login_failed("old"))
             st = orch.pool.state("old")
             self.assertIn("login required", st["last_error"])
             self.assertGreater(st["cooldown_until"], time.time() + 365 * 86400)
         finally:
             orch.stop.set()
+
+    def test_concurrent_login_failures_only_rest_the_account(self):
+        from otterraft.accounts import AccountPool
+        pool = AccountPool({"accounts": [{"name": "a"}], "claude": {"default_cooldown_min": 60}},
+                           DB(Path(tempfile.mkdtemp()) / "x.db"))
+        results = []
+        threads = [threading.Thread(target=lambda: results.append(pool.login_failed("a"))) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(results, [False] * 8)  # one stale token hit by 8 calls is one strike
+        st = pool.state("a")
+        self.assertIn("login check failed", st["last_error"])
+        self.assertLess(st["cooldown_until"], time.time() + 60)
+
+    def test_cli_login_errors_are_recognised(self):
+        from otterraft.agents.claude import ClaudeRun
+        tmp = tempfile.mkdtemp()
+        cfg = {"claude_bin": FAKE_CLAUDE, "claude": {"permission_mode": "auto"}}
+        for d in ("synthlogin", "emptylogin"):
+            res = ClaudeRun(cfg, {"name": d, "config_dir": f"{tmp}/{d}"}, "fix app.py", tmp, None,
+                            lambda *a: None).run()
+            self.assertEqual(res["failure"], "login", d)
+
+    def test_model_prose_about_login_does_not_touch_the_account(self):
+        orch = self._orch()
+        t = self._done(orch, orch.submit("PROSELOGIN fix app.py", agent_pref="claude"))
+        self.assertEqual(t["status"], "failed")
+        self.assertEqual(orch.pool.state("a")["cooldown_until"], 0)
+
+    def test_cancel_stops_a_quick_call_for_real(self):
+        orch = self._orch()
+        notified = []
+        orch.notify = lambda title, body: notified.append(title)
+        tid = orch.submit("Summarize SLOW notes", agent_pref="quick")
+        wait_for(lambda: orch.db.task(tid)["status"] == "running" and tid in orch.active)
+        t0 = time.time()
+        orch.cancel(tid)
+        wait_for(lambda: tid not in orch.busy)
+        self.assertLess(time.time() - t0, 1.5)  # the CLI was killed, not waited for (it sleeps 2 s)
+        self.assertEqual(orch.db.task(tid)["status"], "cancelled")
+        kinds = [e["kind"] for e in orch.db.events(tid)]
+        self.assertNotIn("finished", kinds)
+        self.assertEqual(notified, [])
+
+    def test_reply_right_after_cancel_is_not_lost(self):
+        orch = self._orch()
+        tid = orch.submit("Summarize SLOW notes", agent_pref="quick")
+        wait_for(lambda: orch.db.task(tid)["status"] == "running" and tid in orch.active)
+        orch.cancel(tid)
+        orch.reply(tid, "Actually, keep going")
+        t = self._done(orch, tid)
+        self.assertEqual((t["status"], t["attempts"]), ("review", 2))  # the reply ran again
+
+    def test_quick_tasks_record_the_lessons_they_used(self):
+        orch = self._orch()
+        orch.learner.add_lesson("Summarize release notes as bullet points")
+        tid = orch.submit("Summarize the release notes", agent_pref="quick")
+        self._done(orch, tid)
+        self.assertIn("lessons", [e["kind"] for e in orch.db.events(tid)])
+
+    def test_vietnamese_output_and_file_names_survive(self):
+        from otterraft.runner import git_changes, run_verify
+        v = run_verify({"verify_cmd": f'"{sys.executable}" -c "print(\'Đã sửa lỗi\')"',
+                        "workdir": tempfile.mkdtemp()})
+        self.assertTrue(v["ok"], v["output"])
+        self.assertIn("Đã sửa lỗi", v["output"])
+        repo = tempfile.mkdtemp()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        Path(repo, "tệp.txt").write_text("x", encoding="utf-8")
+        self.assertEqual(git_changes(repo), ["tệp.txt"])
+
+    def test_coach_skips_its_own_scratch_folders(self):
+        from otterraft.coach import Coach
+        data = tempfile.mkdtemp()
+        coach = Coach({"data_dir": data, "shared_config_dir": tempfile.mkdtemp()}, None)
+        scratch = os.path.join(data, "workspaces", "task-1")
+        sibling = os.path.join(data, "workspaces-old", "app")
+        targets, _ = coach.targets([{"workdir": scratch.upper() if os.name == "nt" else scratch},
+                                    {"workdir": sibling}])
+        self.assertEqual(sorted(targets), ["global", f"project:{sibling}"])
+
+    def test_review_reweights_the_lessons_the_task_used(self):
+        orch = self._orch()
+        lid = orch.learner.add_lesson("Use uv, not pip")
+        tid = orch.db.create_task(prompt="x", status="review")
+        orch.db.add_event(tid, "lessons", {"ids": [lid], "texts": ["Use uv, not pip"]})
+        orch.learner.feedback(orch.db.task(tid), accepted=True)
+        self.assertEqual(orch.db.one("SELECT score FROM lessons WHERE id=?", (lid,))["score"], 1.5)
 
     def test_suggest_rule(self):
         from otterraft.learning import suggest_rule
@@ -387,8 +481,10 @@ class Units(unittest.TestCase):
         state = json.loads((acc / ".claude.json").read_text())
         self.assertEqual(state["oauthAccount"]["email"], "b@x")
         self.assertIn("db", state["mcpServers"])
-        self.assertNotIn("CLAUDE.md (left", sync_shared(cfg)[0])  # a re-run sees its own links
+        shared_part = sync_shared(cfg)[0].split(";")[0]  # "[..] account b: shared skills, CLAUDE.md"
+        self.assertIn("CLAUDE.md", shared_part)  # a re-run sees its own links, not a conflict
 
+    @unittest.skipUnless(os.name == "nt", "junctions are Windows-only; POSIX falls back to a copy")
     def test_link_without_symlink_rights_stays_live(self):
         from otterraft.accounts import _link_without_symlink_rights
         tmp = Path(tempfile.mkdtemp())
@@ -417,6 +513,9 @@ class Units(unittest.TestCase):
             self.assertEqual(router.classify("Summarize this")["category"], "summarize")
         self.assertEqual(seen["env"]["ANTHROPIC_API_KEY"], "sk-test")
         pool.best_available.assert_not_called()
+        with mock.patch.dict(os.environ, {"OTTERRAFT_BRAIN_API_KEY": "sk-test"}):
+            # agents never see it (and a failure must not print the whole environment)
+            self.assertFalse("OTTERRAFT_BRAIN_API_KEY" in account_env({"name": "a"}))
 
     def test_parse_report(self):
         r = parse_report('blah\n```otterraft-report\n{"status":"done","summary":"x"}\n```')

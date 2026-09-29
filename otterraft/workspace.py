@@ -21,8 +21,9 @@ class WorkspaceError(Exception):
 
 
 def git(args, cwd, timeout=120, env=None):
-    p = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout,
-                       env={**os.environ, **(env or {})})
+    # quotepath=off: file names with accents come back as text, not "t\341\273\207p.txt".
+    p = subprocess.run(["git", "-c", "core.quotepath=off", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout,
+                       encoding="utf-8", errors="replace", env={**os.environ, **(env or {})})
     if p.returncode:
         raise WorkspaceError(f"git {' '.join(args)}: {(p.stderr or p.stdout).strip()[:500]}")
     return p.stdout.strip()
@@ -62,7 +63,8 @@ def prepare(cfg, task):
     exec_dir = path / Path(task["workdir"]).resolve().relative_to(Path(root).resolve())
     if ws.get("setup_cmd"):
         p = subprocess.run(ws["setup_cmd"], shell=True, cwd=exec_dir, capture_output=True,
-                           text=True, timeout=1800)
+                           text=True, encoding="utf-8", errors="replace", timeout=1800,
+                           env={**os.environ, "PYTHONIOENCODING": "utf-8"})
         if p.returncode:
             raise WorkspaceError(f"setup_cmd failed:\n{(p.stdout + p.stderr)[-1500:]}")
     return {"exec_dir": str(exec_dir), "branch": branch, "base_repo": root,

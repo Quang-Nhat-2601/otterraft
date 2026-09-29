@@ -13,6 +13,7 @@ class AccountPool:
         self.db = db
         self.lock = threading.Lock()
         self.running = {}  # account name -> count
+        self.login_rest_until = {}  # account name -> end of the rest after a first login failure
 
     @property
     def accounts(self):
@@ -75,6 +76,22 @@ class AccountPool:
         return self.cool_down(name, time.time() + 10 * 365 * 86400,
                               f"login required: run `otterraft login {name}`")
 
+    def login_failed(self, name):
+        """The CLI sometimes reports "Login expired" once on a valid token: rest the account 15 s,
+        and park it on a login failure within 10 minutes after that rest. Failures during the rest
+        are the same stale token hit by concurrent calls, not a second strike. Returns True when parked."""
+        now = time.time()
+        with self.lock:  # the DB writes too: a late 15 s rest must never overwrite a park
+            rest_end = self.login_rest_until.get(name, 0)
+            if now < rest_end:
+                return False
+            if now < rest_end + 600:
+                self.park_login(name)
+                return True
+            self.login_rest_until[name] = now + 15
+            self.cool_down(name, now + 15, "login check failed once; retrying shortly")
+            return False
+
     def acquire(self, exclude=()):
         """Reserve a slot on the best account. Returns the account dict or None."""
         with self.lock:
@@ -97,6 +114,7 @@ class AccountPool:
         return until
 
     def reset(self, name):
+        self.login_rest_until.pop(name, None)
         self.db.execute("UPDATE account_state SET cooldown_until=0, last_error=NULL WHERE name=?", (name,))
 
     def next_free_at(self):
@@ -180,8 +198,8 @@ def _sync_mcp(src, dst, dry_run):
     if not s_file.exists() or not d_file.exists():
         return ""
     try:
-        servers = json.loads(s_file.read_text()).get("mcpServers") or {}
-        state = json.loads(d_file.read_text())
+        servers = json.loads(s_file.read_text(encoding="utf-8")).get("mcpServers") or {}
+        state = json.loads(d_file.read_text(encoding="utf-8"))
     except ValueError:
         return "unreadable .claude.json"
     if not servers:
@@ -191,6 +209,6 @@ def _sync_mcp(src, dst, dry_run):
     if new and not dry_run:
         state["mcpServers"] = {**have, **new}
         tmp = d_file.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(state, indent=2))
+        tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
         os.replace(tmp, d_file)
     return f"{len(servers)} ({len(new)} {'to add' if dry_run else 'added'})"

@@ -8,6 +8,7 @@ Rules (borrowed from Paperclip's reflection coach):
   tools, and nothing is written until you approve it in the dashboard
 - every applied change keeps a backup and can be rolled back"""
 import json
+import os
 import re
 import shutil
 import time
@@ -85,9 +86,11 @@ class Coach:
     # -- building the run ----------------------------------------------------
     def targets(self, tasks):
         shared = Path(self.cfg["shared_config_dir"])
+        norm = lambda p: os.path.normcase(os.path.abspath(p))
+        scratch = norm(Path(self.cfg["data_dir"]) / "workspaces") + os.sep  # per-task folders, not projects
         repos = sorted({t.get("base_repo") or t.get("workdir") for t in tasks
                         if (t.get("base_repo") or t.get("workdir"))
-                        and "/workspaces/task-" not in (t.get("workdir") or "")})
+                        and not norm(t.get("workdir") or "").startswith(scratch)})
         out = {"global": {"path": str(shared / "CLAUDE.md")}}
         for r in repos:
             out[f"project:{r}"] = {"path": str(Path(r) / "CLAUDE.md")}
@@ -149,8 +152,8 @@ class Coach:
             data = json.loads(m[-1].group(1))
         except ValueError as e:
             return f"Unreadable proposals block: {e}", 0
-        evidence_ids = {e["id"] for e in json.loads((Path(run_dir) / "evidence.json").read_text())}
-        targets = json.loads((Path(run_dir) / "targets.json").read_text())["claude_md"]
+        evidence_ids = {e["id"] for e in json.loads((Path(run_dir) / "evidence.json").read_text(encoding="utf-8"))}
+        targets = json.loads((Path(run_dir) / "targets.json").read_text(encoding="utf-8"))["claude_md"]
         stored = 0
         for p in (data.get("proposals") or [])[:10]:
             try:

@@ -94,7 +94,7 @@ class Router:
                 self.pool.cool_down(account["name"], res["reset_at"] or self.pool.window_reset(account["name"]),
                                     res["error"] or "")
             elif res["failure"] == "login":
-                self.pool.park_login(account["name"])
+                self.pool.login_failed(account["name"])
             return None
         out = parse_json_answer(res["text"])
         return self._clean(out, f"claude {res['model']}") if isinstance(out, dict) and out.get("category") else None

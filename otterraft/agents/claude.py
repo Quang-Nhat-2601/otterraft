@@ -10,8 +10,16 @@ from pathlib import Path
 from ..failures import classify
 
 
+def cli(cfg):
+    """claude_bin as an argv prefix; a list lets Windows run a script, e.g. [python, fake_claude.py]."""
+    b = cfg["claude_bin"]
+    return list(b) if isinstance(b, list) else [b]
+
+
 def account_env(account):
     env = dict(os.environ)
+    # Agents can read their environment; the brain's key reaches the brain only via account["env"].
+    env.pop("OTTERRAFT_BRAIN_API_KEY", None)
     # An API key in the environment would silently override the account's subscription login.
     if not account.get("use_api_key"):
         env.pop("ANTHROPIC_API_KEY", None)
@@ -61,7 +69,7 @@ class ClaudeRun:
     def command(self):
         c = self.cfg["claude"]
         # The prompt goes through stdin: Windows caps a whole command line at ~32K chars.
-        cmd = [self.cfg["claude_bin"], "-p", "--output-format", "stream-json",
+        cmd = [*cli(self.cfg), "-p", "--output-format", "stream-json",
                "--verbose", "--permission-mode", c["permission_mode"]]
         if c.get("max_turns"):
             cmd += ["--max-turns", str(c["max_turns"])]
@@ -104,6 +112,8 @@ class ClaudeRun:
         except OSError as e:
             res["error"] = f"Could not start the Claude CLI ({self.cfg['claude_bin']}): {e}"
             return res
+        if self.cancelled:  # cancel() ran before there was a process to stop
+            self.proc.kill()
         try:
             self.proc.stdin.write(self.prompt)
             self.proc.stdin.close()
@@ -116,7 +126,7 @@ class ClaudeRun:
                 del stderr_lines[:-50]
         threading.Thread(target=pump_stderr, daemon=True).start()
 
-        last_text = ""
+        last_text, cli_error, n_texts, empty_result = "", "", 0, False
         tasks = {}  # for TaskCreate/TaskUpdate style progress
         for line in self.proc.stdout:
             line = line.strip()
@@ -135,9 +145,13 @@ class ClaudeRun:
                                        "account": self.account["name"],
                                        "permission_mode": msg.get("permissionMode")})
             elif t == "assistant":
+                # The CLI's own errors ("Login expired", "You've hit your limit") come as <synthetic> messages.
+                synthetic = (msg.get("message") or {}).get("model") == "<synthetic>"
                 for block in (msg.get("message") or {}).get("content") or []:
                     if block.get("type") == "text" and block.get("text", "").strip():
-                        last_text = block["text"]
+                        last_text, n_texts = block["text"], n_texts + 1
+                        if synthetic:
+                            cli_error = block["text"]
                         self.on_event("text", {"text": block["text"][:4000]})
                     elif block.get("type") == "tool_use":
                         name, inp = block.get("name"), block.get("input") or {}
@@ -153,6 +167,7 @@ class ClaudeRun:
                         self.on_event("tool_error", {"text": _text_of(block.get("content"))[:1500]})
             elif t == "result":
                 tokens = usage_totals(msg)
+                empty_result = not msg.get("result")
                 res.update(
                     ok=not msg.get("is_error") and msg.get("subtype") == "success",
                     text=msg.get("result") or last_text,
@@ -180,9 +195,12 @@ class ClaudeRun:
         if self.proc.returncode and not res["error"]:
             res["error"] = "\n".join(stderr_lines[-10:]) or f"exit code {self.proc.returncode}"
         if not res["ok"]:
-            # CLI errors such as "Login expired" can arrive as the only assistant message, with an empty result.
-            short_reply = last_text if res["num_turns"] <= 1 else ""
-            for text in (res["error"], short_reply, "\n".join(stderr_lines[-5:])):
+            # Never the model's own prose: a task *about* login errors must not park an account.
+            # Fallback in case a CLI error isn't marked <synthetic>: the run's only text, reported
+            # with an empty result (a model that wrote prose and then crashed sends no result at all).
+            if not cli_error and empty_result and n_texts == 1 and res["num_turns"] <= 1:
+                cli_error = last_text
+            for text in (res["error"], cli_error, "\n".join(stderr_lines[-5:])):
                 kind, reset = classify(text, resumed=bool(self.resume_session), num_turns=res["num_turns"])
                 if kind:
                     res.update(failure=kind, reset_at=reset, limit=kind == "quota")
@@ -235,11 +253,11 @@ def _text_of(content):
     return str(content)
 
 
-def quick_call(cfg, account, system, prompt, model, timeout=120):
+def quick_call(cfg, account, system, prompt, model, timeout=120, on_start=None):
     """One lean Claude call on a subscription account: no tools, skills, MCP or CLAUDE.md, and
     our own short system prompt instead of Claude Code's. About 1K tokens of context instead of
     ~40K for a default `claude -p`, so routing and short text answers cost almost no quota.
-    Returns the same result shape as ClaudeRun.run()."""
+    Returns the same result shape as ClaudeRun.run(). on_start(proc) lets a caller kill it."""
     res = {"ok": False, "text": "", "error": None, "failure": None, "reset_at": None, "limit": False,
            "cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "cached_tokens": 0,
            "duration_ms": 0, "num_turns": 0, "session_id": None, "model": model,
@@ -247,25 +265,31 @@ def quick_call(cfg, account, system, prompt, model, timeout=120):
     # A neutral cwd, so no project CLAUDE.md or settings get pulled in.
     cwd = Path(cfg["data_dir"]) / "brain"
     cwd.mkdir(parents=True, exist_ok=True)
-    cmd = [cfg["claude_bin"], "-p", "--output-format", "json", "--max-turns", "1",
+    cmd = [*cli(cfg), "-p", "--output-format", "json", "--max-turns", "1",
            "--tools", "", "--system-prompt", system, "--disable-slash-commands",
            "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}']
     if model:
         cmd += ["--model", model]
     t0 = time.time()
     try:
-        p = subprocess.run(cmd, cwd=cwd, env=account_env(account), input=prompt,
-                           capture_output=True, text=True, encoding="utf-8", errors="replace",
-                           timeout=timeout)
-    except subprocess.TimeoutExpired:
-        res.update(error=f"timed out after {timeout}s", failure="transient")
-        return res
+        p = subprocess.Popen(cmd, cwd=cwd, env=account_env(account), stdin=subprocess.PIPE,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                             encoding="utf-8", errors="replace")
     except OSError as e:
         res["error"] = f"Could not start the Claude CLI ({cfg['claude_bin']}): {e}"
         return res
+    if on_start:
+        on_start(p)
+    try:
+        stdout, stderr = p.communicate(prompt, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        p.kill()
+        p.communicate()
+        res.update(error=f"timed out after {timeout}s", failure="transient")
+        return res
     res["duration_ms"] = int((time.time() - t0) * 1000)
     try:
-        msg = json.loads(p.stdout.strip().splitlines()[-1]) if p.stdout.strip() else {}
+        msg = json.loads(stdout.strip().splitlines()[-1]) if stdout.strip() else {}
     except ValueError:
         msg = {}
     if msg:
@@ -277,7 +301,7 @@ def quick_call(cfg, account, system, prompt, model, timeout=120):
         if by_model:  # the model that did the work, not the background helper
             res["model"] = max(by_model, key=lambda m: by_model[m].get("outputTokens") or 0)
     if not res["ok"]:
-        res["error"] = (msg.get("result") if msg else None) or p.stderr.strip()[-500:] or f"exit {p.returncode}"
+        res["error"] = (msg.get("result") if msg else None) or stderr.strip()[-500:] or f"exit {p.returncode}"
         kind, reset = classify(res["error"])
         res.update(failure=kind, reset_at=reset, limit=kind == "quota")
     return res

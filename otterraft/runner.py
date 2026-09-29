@@ -1,4 +1,5 @@
 """Scheduler + workers. Picks queued tasks, routes them, runs them, verifies, reports, learns."""
+import os
 import subprocess
 import threading
 import time
@@ -33,12 +34,13 @@ class Orchestrator:
         self.router = Router(cfg, db, self.local, self.pool)
         self.learner = Learner(cfg, db, self.local)
         self.coach = Coach(cfg, db)
-        self.active = {}          # task_id -> ClaudeRun (for cancel)
+        self.active = {}          # task_id -> callable that stops its CLI process (for cancel)
         self.busy = {}            # task_id -> lock key (a directory, or the task itself)
         self.lock = threading.Lock()
         self.stop = threading.Event()
         self.stall_flagged = set()
         self.routing = set()      # task ids being classified off the scheduler thread
+        self.cancelled = set()    # task ids cancelled while a worker still holds them
         # Tasks left "running" by a previous crash go back to the queue.
         db.execute("UPDATE tasks SET status='queued' WHERE status='running'")
 
@@ -89,10 +91,19 @@ class Orchestrator:
         self.emit(task_id, "user_message", {"text": message})
         self.changed(task_id)
 
+    def _track(self, task_id, stop):
+        """Register how to stop a task's call; stops it at once if a cancel already came in."""
+        self.active[task_id] = stop
+        if task_id in self.cancelled:
+            stop()
+            return True
+        return False
+
     def cancel(self, task_id):
-        run = self.active.get(task_id)
-        if run:
-            run.cancel()
+        self.cancelled.add(task_id)
+        stop = self.active.get(task_id)
+        if stop:
+            stop()
         self.db.update_task(task_id, status="cancelled", finished_at=time.time())
         self.emit(task_id, "cancelled", {})
         self.changed(task_id)
@@ -193,6 +204,8 @@ class Orchestrator:
         with self.lock:
             if key in self.busy.values():
                 return
+        if self.db.task(task["id"])["status"] != "queued":
+            return  # cancelled since this tick's snapshot
         account, slot = None, False
         if task["agent"] == "claude":
             account, slot = self.pool.acquire(), True
@@ -202,6 +215,7 @@ class Orchestrator:
             return  # all accounts busy, cooling down or parked; stay queued
         with self.lock:
             self.busy[task["id"]] = key
+        self.cancelled.discard(task["id"])
         self.db.update_task(task["id"], status="running", started_at=task.get("started_at") or time.time(),
                             attempts=(task.get("attempts") or 0) + 1, last_event_at=time.time(),
                             not_before=None)
@@ -226,6 +240,12 @@ class Orchestrator:
         finally:
             if slot:
                 self.pool.release(account["name"])
+            if task["id"] in self.cancelled:
+                # A worker that ends after the cancel must not resurrect the task, but a reply
+                # sent since then ("queued") is the user's newer intent and stands.
+                self.cancelled.discard(task["id"])
+                if self.db.task(task["id"])["status"] != "queued":
+                    self.db.update_task(task["id"], status="cancelled")
             with self.lock:
                 self.busy.pop(task["id"], None)
             self.active.pop(task["id"], None)
@@ -252,11 +272,15 @@ class Orchestrator:
     def _system_prompt(self, task):
         if task.get("kind") == "reflection":
             return COACH_SYSTEM
+        return "\n\n".join(x for x in (REPORT_INSTRUCTIONS, self._lessons_block(task)) if x)
+
+    def _lessons_block(self, task):
+        """Lessons for this task's prompt. The "lessons" event is what review feedback re-weights."""
         lessons = self.learner.relevant_lessons(task["prompt"], task.get("workdir"))
         if lessons:
             self.emit(task["id"], "lessons", {"ids": [l["id"] for l in lessons],
                                               "texts": [l["text"] for l in lessons]})
-        return "\n\n".join(x for x in (REPORT_INSTRUCTIONS, self.learner.lessons_block(lessons)) if x)
+        return self.learner.lessons_block(lessons)
 
     def _run_claude(self, task, account):
         tid = task["id"]
@@ -297,7 +321,8 @@ class Orchestrator:
         run = ClaudeRun(self.cfg, account, prompt, task.get("exec_dir") or task.get("workdir"),
                         system, on_event, resume_session=resume, extra_args=extra,
                         model=self._agent_model(task))
-        self.active[tid] = run
+        if self._track(tid, run.cancel):  # cancelled while the worktree was being prepared
+            return
         res = run.run()
         if run.cancelled:
             return
@@ -340,9 +365,11 @@ class Orchestrator:
                       f"Follow-up from the user:\n{message}"
         self.db.update_task(tid, account=account["name"], model=q.get("model"), pending_message=None)
         self.emit(tid, "start", {"agent": "quick", "account": account["name"], "model": q.get("model")})
-        lessons = self.learner.relevant_lessons(task["prompt"], task.get("workdir"))
-        system = "\n\n".join(x for x in (QUICK_SYSTEM, self.learner.lessons_block(lessons)) if x)
-        res = quick_call(self.cfg, account, system, prompt, q.get("model"), timeout=q.get("timeout_sec", 300))
+        system = "\n\n".join(x for x in (QUICK_SYSTEM, self._lessons_block(task)) if x)
+        res = quick_call(self.cfg, account, system, prompt, q.get("model"), timeout=q.get("timeout_sec", 300),
+                         on_start=lambda p: self._track(tid, p.kill))
+        if tid in self.cancelled:
+            return
         cur = self.db.task(tid)
         self.db.update_task(
             tid, model=res["model"], cost_usd=(cur["cost_usd"] or 0) + res["cost_usd"],
@@ -372,14 +399,12 @@ class Orchestrator:
             until = self.pool.cool_down(name, res["reset_at"] or self.pool.window_reset(name), res["error"] or "")
             self.emit(tid, "account_limit", {"account": name, "until": until})
             self.notify("Account limit", f"{name} is out of usage until {time.ctime(until)}; switching account")
-        elif kind == "login" and not task.get("retries"):
-            # The CLI sometimes reports "Login expired" for a first call on a valid token: retry before parking.
-            self.db.update_task(tid, retries=1, not_before=time.time() + 15)
-            self.emit(tid, "retry_later", {"attempt": 1, "in_sec": 15, "error": (res["error"] or "")[:300]})
         elif kind == "login":
-            self.pool.park_login(name)
-            self.emit(tid, "account_login_required", {"account": name})
-            self.notify("Account logged out", f"{name} needs `otterraft login {name}`")
+            if self.pool.login_failed(name):
+                self.emit(tid, "account_login_required", {"account": name})
+                self.notify("Account logged out", f"{name} needs `otterraft login {name}`")
+            else:
+                self.emit(tid, "retry_later", {"attempt": 1, "in_sec": 15, "error": (res["error"] or "")[:300]})
         elif kind == "transient":
             n = (task.get("retries") or 0) + 1
             if n > self.cfg["claude"].get("transient_retries", 5):
@@ -420,6 +445,8 @@ class Orchestrator:
             ok, text, err = bool(out["text"].strip()), out["text"], None if out["text"].strip() else "empty answer"
         except Exception as e:
             out, ok, text, err = {"input_tokens": 0, "output_tokens": 0, "duration_ms": 0}, False, "", str(e)
+        if tid in self.cancelled:  # an HTTP call can't be interrupted; drop its late answer
+            return
         self.emit(tid, "text", {"text": text[:4000]} if ok else {"text": f"local error: {err}"})
         cur = self.db.task(tid)
         self.db.update_task(tid, input_tokens=(cur["input_tokens"] or 0) + out["input_tokens"],
@@ -439,6 +466,8 @@ class Orchestrator:
 
     # -- completion ----------------------------------------------------------------------
     def _finish(self, task, ok, text, error):
+        if task["id"] in self.cancelled:
+            return  # no report, lessons or "ready for review" push for a task the user cancelled
         if task.get("kind") == "reflection":
             return self._finish_reflection(task, ok, text, error)
         tid = task["id"]
@@ -497,8 +526,8 @@ def git_changes(workdir):
     if not workdir:
         return None
     try:
-        out = subprocess.run(["git", "status", "--porcelain"], cwd=workdir, capture_output=True,
-                             text=True, timeout=20)
+        out = subprocess.run(["git", "-c", "core.quotepath=off", "status", "--porcelain"], cwd=workdir, capture_output=True,
+                             text=True, encoding="utf-8", errors="replace", timeout=20)
         if out.returncode:
             return None
         return [line[3:] for line in out.stdout.splitlines() if line.strip()][:200]
@@ -510,7 +539,9 @@ def run_verify(task):
     t0 = time.time()
     try:
         p = subprocess.run(task["verify_cmd"], shell=True, cwd=task.get("exec_dir") or task.get("workdir") or None,
-                           capture_output=True, text=True, timeout=900)
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=900,
+                           # Python children otherwise write the ANSI code page into a pipe on Windows.
+                           env={**os.environ, "PYTHONIOENCODING": "utf-8"})
         out = (p.stdout + p.stderr)[-4000:]
         return {"cmd": task["verify_cmd"], "ok": p.returncode == 0, "code": p.returncode,
                 "output": out, "sec": round(time.time() - t0, 1)}

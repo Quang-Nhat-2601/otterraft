@@ -3,6 +3,10 @@
 CLAUDE_CONFIG_DIR name and the prompt:
 - config dir containing 'limited'   -> starts work, then fails with a usage-limit error
 - config dir containing 'loggedout' -> fails with a login error
+- config dir containing 'synthlogin' / 'emptylogin' -> an agent run fails with "Login expired"
+  as a <synthetic> message / as the only text with an empty result
+- prompt containing 'PROSELOGIN'    -> the model quotes "Login expired", then the CLI dies
+- prompt containing 'SLOW'          -> sleeps 2 s first (to cancel mid-call)
 - prompt containing 'OVERLOAD'      -> first run fails with 529 overloaded, later runs succeed
 - --resume of an unknown session    -> 'No conversation found'
 - --tools Read,Grep,Glob            -> behaves as the Reflection Coach
@@ -12,6 +16,7 @@ CLAUDE_CONFIG_DIR name and the prompt:
 Every invocation's arguments are appended to $FAKE_CLAUDE_LOG when set."""
 import json
 import os
+import re
 import sys
 import uuid
 from pathlib import Path
@@ -32,6 +37,10 @@ def fail(text, turns=0):
          "total_cost_usd": 0.0, "usage": {"input_tokens": 1, "output_tokens": 1}, "num_turns": turns})
     sys.exit(1)
 
+
+if "SLOW" in prompt:
+    import time
+    time.sleep(2)
 
 if "loggedout" in str(cfg_dir):
     fail("Invalid API key · Please run /login")
@@ -55,7 +64,22 @@ if args[args.index("--output-format") + 1] == "json":
                         "claude-haiku-test": {"inputTokens": 300, "outputTokens": 5}}})
     sys.exit(0)
 
-proj = cfg_dir / "projects" / os.getcwd().replace("/", "-")
+if "synthlogin" in str(cfg_dir):  # the CLI's own error message, no result
+    out({"type": "assistant", "message": {"model": "<synthetic>", "content": [
+        {"type": "text", "text": "Login expired · Run /login to sign in again"}]}})
+    sys.exit(1)
+if "emptylogin" in str(cfg_dir):  # unmarked, but the run's only text with an empty result
+    out({"type": "assistant", "message": {"model": "claude-test", "content": [
+        {"type": "text", "text": "Login expired · Run /login"}]}})
+    out({"type": "result", "subtype": "success", "is_error": True, "session_id": sid, "result": "",
+         "num_turns": 1})
+    sys.exit(1)
+if "PROSELOGIN" in prompt:  # the model's own words, then the CLI dies without a result
+    out({"type": "assistant", "message": {"model": "claude-test", "content": [
+        {"type": "text", "text": "Users see: Login expired · Run /login"}]}})
+    sys.exit(1)
+
+proj = cfg_dir / "projects" / re.sub(r"[\\/:]", "-", os.getcwd())
 if resume and not (proj / f"{sid}.jsonl").exists():
     fail(f"No conversation found with session ID: {sid}")
 proj.mkdir(parents=True, exist_ok=True)

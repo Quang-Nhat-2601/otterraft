@@ -10,6 +10,7 @@ from pathlib import Path
 
 from . import config
 from .accounts import sync_shared
+from .agents.claude import cli
 from .bus import Bus
 from .db import DB
 
@@ -83,7 +84,7 @@ def cmd_login(args, cfg):
         Path(acc["config_dir"]).mkdir(parents=True, exist_ok=True)
         env["CLAUDE_CONFIG_DIR"] = acc["config_dir"]
     print(f"Starting Claude Code for account '{acc['name']}'. Type /login, sign in, then /exit.")
-    subprocess.call([cfg["claude_bin"]], env=env)
+    subprocess.call(cli(cfg), env=env)
     open_db(cfg).execute("UPDATE account_state SET cooldown_until=0, last_error=NULL WHERE name=? "
                          "AND last_error LIKE 'login required%'", (acc["name"],))
     for line in sync_shared(cfg):
@@ -93,7 +94,7 @@ def cmd_login(args, cfg):
 def cmd_doctor(args, cfg):
     from .agents.local import LocalLLM
     ok = True
-    path = shutil.which(cfg["claude_bin"])
+    path = shutil.which(cli(cfg)[0])
     print(f"[{'ok' if path else 'X '}] claude CLI: {path or 'not found'}")
     ok &= bool(path)
     for a in cfg["accounts"]:

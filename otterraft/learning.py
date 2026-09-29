@@ -134,6 +134,8 @@ class Learner:
     def feedback(self, task, accepted):
         """User accepted/rejected: re-weight the lessons that were used for this task."""
         delta = 0.5 if accepted else -0.5
-        self.db.execute("UPDATE lessons SET score=score+? WHERE source_task=?", (delta, task["id"]))
+        used = {i for e in self.db.events(task["id"]) if e["kind"] == "lessons" for i in e["data"].get("ids", [])}
+        for lid in used:
+            self.db.execute("UPDATE lessons SET score=score+? WHERE id=?", (delta, lid))
         self.db.execute("UPDATE usage SET ok=? WHERE task_id=? AND id=(SELECT MAX(id) FROM usage "
                         "WHERE task_id=?)", (1 if accepted else 0, task["id"], task["id"]))
