@@ -1,4 +1,5 @@
 """Scheduler + workers. Picks queued tasks, routes them, runs them, verifies, reports, learns."""
+import logging
 import os
 import subprocess
 import threading
@@ -20,6 +21,24 @@ CONTINUE_MSG = ("You were interrupted (provider limit, account switch or connect
                 "Continue the task exactly where you left off, then finish with the report block.")
 RESTART_NOTE = ("\n\n(An earlier attempt at this task was interrupted and could not be resumed. "
                 "Check the working tree for partial progress before redoing anything.)")
+log = logging.getLogger("otterraft")
+# One console line per event that changes what a task or an account is doing (`serve` shows them).
+CONSOLE = {
+    "created": lambda d: "queued",
+    "routed": lambda d: f"-> {d['agent']} ({d['category']}, complexity {d['complexity']})",
+    "start": lambda d: f"started: {d['agent']} on {d.get('account') or d.get('model')}",
+    "finished": lambda d: d["status"],
+    "cancelled": lambda d: "cancelled",
+    "escalated": lambda d: f"escalated to {d['to']}",
+    "retry_later": lambda d: f"temporary error, retrying in {round(d['in_sec'])}s",
+    "session_reset": lambda d: "session could not be resumed, starting over",
+    "handoff": lambda d: f"session handed off {d['from']} -> {d['to']}",
+    "account_limit": lambda d: f"account {d['account']} is out of usage until {time.ctime(d['until'])}",
+    "account_login_required": lambda d: f"account {d['account']} is logged out: otterraft login {d['account']}",
+    "stalled": lambda d: f"no activity for {d['idle_sec']}s",
+    "merged": lambda d: f"merged {d['branch']} into {d['into']}",
+    "error": lambda d: f"error: {d['text'][:300]}",
+}
 QUICK_SYSTEM = ("You answer tasks from a software developer's task queue. Answer directly and "
                 "completely, in the language the task is written in. You have no tools and cannot "
                 "read files or run commands; if the task needs something you were not given, say "
@@ -47,6 +66,8 @@ class Orchestrator:
 
     # -- events ------------------------------------------------------------------
     def emit(self, task_id, kind, data):
+        if kind in CONSOLE:
+            log.info("#%s %s", task_id, CONSOLE[kind](data))
         ev = self.db.add_event(task_id, kind, data)
         self.db.update_task(task_id, last_event_at=ev["ts"])
         self.bus.publish({"type": "event", "event": ev})
@@ -132,6 +153,11 @@ class Orchestrator:
         head = workspace.merge(task)
         self.db.update_task(task_id, merged_at=time.time())
         self.emit(task_id, "merged", {"branch": task["branch"], "into": task["base_branch"], "head": head})
+        try:  # the work now lives in the base branch; the worktree and its branch are leftovers
+            workspace.remove(task, delete_branch=True)
+            self.db.update_task(task_id, exec_dir=None)
+        except workspace.WorkspaceError as e:
+            self.emit(task_id, "error", {"text": f"merged, but could not remove the worktree: {e}"})
         self.changed(task_id)
         return head
 

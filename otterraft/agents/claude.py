@@ -125,9 +125,9 @@ class ClaudeRun:
     def _run(self, system_file):
         res = {"ok": False, "session_id": self.resume_session, "text": "", "cost_usd": 0.0,
                "input_tokens": 0, "output_tokens": 0, "cached_tokens": 0, "duration_ms": 0,
-               "num_turns": 0, "failure": None, "limit": False, "reset_at": None, "error": None,
+               "num_turns": 0, "failure": None, "reset_at": None, "error": None,
                "permission_denials": [],
-               "model": self.model, "todos": None}
+               "model": self.model}
         t0 = time.time()
         stderr_lines = []
         try:
@@ -189,7 +189,6 @@ class ClaudeRun:
                         self.on_event("tool", {"name": name, "input": _short(inp)})
                         todos = _todos_from_tool(name, inp, tasks)
                         if todos is not None:
-                            res["todos"] = todos
                             self.on_event("todos", {"todos": todos})
             elif t == "user":
                 for block in (msg.get("message") or {}).get("content") or []:
@@ -234,7 +233,7 @@ class ClaudeRun:
             for text in (res["error"], cli_error, "\n".join(stderr_lines[-5:])):
                 kind, reset = classify(text, resumed=bool(self.resume_session), num_turns=res["num_turns"])
                 if kind:
-                    res.update(failure=kind, reset_at=reset, limit=kind == "quota")
+                    res.update(failure=kind, reset_at=reset)
                     break
         return res
 
@@ -286,8 +285,9 @@ def _text_of(content):
 
 def quick_call(cfg, account, system, prompt, model, timeout=120, on_start=None):
     """One lean Claude call on a subscription account: no tools, skills, MCP or CLAUDE.md, and
-    our own short system prompt instead of Claude Code's. About 7K input tokens (measured)
-    against 25K+ for even a trivial agent session, so routing and short text answers cost little.
+    our own short system prompt instead of Claude Code's, and no user-level settings. About 4.4K
+    tokens of context (measured) against 25K+ for even a trivial agent session, mostly read from
+    the prompt cache when calls follow each other, so routing and short answers cost little.
     Returns the same result shape as ClaudeRun.run(). on_start(stop) hands a caller a way to kill it."""
     system_file = _prompt_file(cfg, system)
     try:
@@ -297,7 +297,7 @@ def quick_call(cfg, account, system, prompt, model, timeout=120, on_start=None):
 
 
 def _quick_call(cfg, account, system_file, prompt, model, timeout, on_start):
-    res = {"ok": False, "text": "", "error": None, "failure": None, "reset_at": None, "limit": False,
+    res = {"ok": False, "text": "", "error": None, "failure": None, "reset_at": None,
            "cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "cached_tokens": 0,
            "duration_ms": 0, "num_turns": 0, "session_id": None, "model": model,
            "permission_denials": []}
@@ -306,7 +306,10 @@ def _quick_call(cfg, account, system_file, prompt, model, timeout, on_start):
     cwd.mkdir(parents=True, exist_ok=True)
     cmd = [*claude_command(cfg), "-p", "--output-format", "json", "--max-turns", "1",
            "--tools", "", "--system-prompt-file", str(system_file), "--disable-slash-commands",
-           "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}']
+           "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
+           # No user settings: their hooks and plugins added ~3K tokens to every call (measured
+           # 7.6K -> 4.4K). A stable prompt prefix then lets back-to-back calls read the cache.
+           "--setting-sources", "project", "--exclude-dynamic-system-prompt-sections"]
     if model:
         cmd += ["--model", model]
     t0 = time.time()
@@ -342,7 +345,7 @@ def _quick_call(cfg, account, system_file, prompt, model, timeout, on_start):
     if not res["ok"]:
         res["error"] = (msg.get("result") if msg else None) or stderr.strip()[-500:] or f"exit {p.returncode}"
         kind, reset = classify(res["error"])
-        res.update(failure=kind, reset_at=reset, limit=kind == "quota")
+        res.update(failure=kind, reset_at=reset)
     return res
 
 

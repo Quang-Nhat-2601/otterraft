@@ -14,9 +14,14 @@ dependencies = []
 keywords = ["claude-code", "ai-agents", "agent-orchestration", "llm", "developer-tools", "automation", "dashboard", "git-worktree", "ollama"]
 classifiers = [
     "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
     "Environment :: Web Environment",
     "Topic :: Software Development",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Quang-Nhat-2601/otterraft"
+Issues = "https://github.com/Quang-Nhat-2601/otterraft/issues"
 
 [project.scripts]
 otterraft = "otterraft.__main__:main"

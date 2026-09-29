@@ -1,4 +1,5 @@
 """The "brain": decides which agent gets a task, and learns from outcomes via success stats."""
+import logging
 import os
 import re
 import time
@@ -94,8 +95,9 @@ class Router:
                 # A bad or empty key would otherwise fail every task silently: say so, use the
                 # subscription accounts for a while, and classify this task with one of them.
                 self.key_off_until = time.time() + 600
-                print(f"[otterraft] OTTERRAFT_BRAIN_API_KEY failed ({(res['error'] or '')[:200]}); "
-                      "the brain uses subscription accounts for 10 minutes", flush=True)
+                logging.getLogger("otterraft").warning(
+                    "OTTERRAFT_BRAIN_API_KEY failed (%s); the brain uses subscription accounts for 10 minutes",
+                    (res["error"] or "")[:200])
                 return self._claude_classify(prompt, task_id)
             if res["failure"] == "quota":
                 self.pool.cool_down(account["name"], res["reset_at"] or self.pool.window_reset(account["name"]),
@@ -133,7 +135,11 @@ class Router:
     def route(self, task):
         """Returns (agent_kind, category, complexity, reason)."""
         pref = task.get("agent_pref") or "auto"
-        cls = self.classify(task["prompt"], task.get("id"))
+        if pref in ("quick", "local"):
+            # The worker is chosen and its model doesn't depend on complexity: don't pay the brain.
+            cls = {**heuristic_classify(task["prompt"]), "source": "keywords"}
+        else:
+            cls = self.classify(task["prompt"], task.get("id"))
         cat, cx, src = cls.get("category", "other"), cls.get("complexity", 3), cls["source"]
         if pref in ("claude", "local", "quick"):
             return pref, cat, cx, f"user chose {pref}"

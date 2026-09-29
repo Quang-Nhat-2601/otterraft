@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import os
 import shutil
@@ -59,14 +61,23 @@ class FakeOllama(BaseHTTPRequestHandler):
         self._json({"message": {"content": content}, "prompt_eval_count": 50, "eval_count": 20})
 
 
-def wait_for(fn, timeout=20):
+def wait_for(fn, timeout=30, explain=None):
+    """Poll fn until truthy. On timeout, explain() says what the state was, so a rare CI
+    failure can be diagnosed from its log alone."""
     end = time.time() + timeout
     while time.time() < end:
         v = fn()
         if v:
             return v
         time.sleep(0.1)
-    raise AssertionError("timed out")
+    raise AssertionError(f"timed out after {timeout}s" + (f"; state: {explain()}" if explain else ""))
+
+
+def task_state(db, tid):
+    t = db.task(tid) or {}
+    kinds = [e["kind"] for e in db.events(tid)]
+    return json.dumps({k: t.get(k) for k in ("status", "agent", "account", "error", "route_reason",
+                                             "retries", "session_resets", "not_before")} | {"events": kinds})
 
 
 class E2E(unittest.TestCase):
@@ -109,7 +120,8 @@ class E2E(unittest.TestCase):
         return [json.loads(l) for l in self.log.read_text().splitlines()]
 
     def wait_status(self, tid, statuses=("review", "failed")):
-        return wait_for(lambda: (lambda t: t if t["status"] in statuses else None)(self.api(f"/api/tasks/{tid}")))
+        return wait_for(lambda: (lambda t: t if t["status"] in statuses else None)(self.api(f"/api/tasks/{tid}")),
+                        explain=lambda: task_state(self.orch.db, tid))
 
     def api(self, path, body=None):
         req = urllib.request.Request(self.base + path, json.dumps(body).encode() if body is not None else None,
@@ -121,8 +133,7 @@ class E2E(unittest.TestCase):
     def test_claude_task_switches_account_and_hands_off(self):
         tid = self.api("/api/tasks", {"prompt": "Fix the login bug in app.py and add a test",
                                       "workdir": self.workdir, "verify_cmd": "exit 0"})["id"]
-        t = wait_for(lambda: (lambda t: t if t["status"] in ("review", "failed") else None)(
-            self.api(f"/api/tasks/{tid}")))
+        t = self.wait_status(tid)
         self.assertEqual(t["status"], "review", t.get("error"))
         self.assertEqual(t["agent"], "claude")
         self.assertEqual(t["account"], "acc2")
@@ -157,15 +168,14 @@ class E2E(unittest.TestCase):
 
         # user rejects -> task resumes with feedback, learns a lesson
         self.api(f"/api/tasks/{tid}/review", {"accepted": False, "feedback": "Also handle whitespace"})
-        wait_for(lambda: self.api(f"/api/tasks/{tid}")["status"] == "review")
+        self.wait_status(tid, ("review",))
         self.assertTrue(any("whitespace" in l["text"] for l in self.api("/api/lessons")))
         self.api(f"/api/tasks/{tid}/review", {"accepted": True})
         self.assertEqual(self.api(f"/api/tasks/{tid}")["status"], "done")
 
     def test_simple_task_goes_local(self):
         tid = self.api("/api/tasks", {"prompt": "Summarize this paragraph: AI helps developers."})["id"]
-        t = wait_for(lambda: (lambda t: t if t["status"] in ("review", "failed") else None)(
-            self.api(f"/api/tasks/{tid}")))
+        t = self.wait_status(tid)
         self.assertEqual(t["agent"], "local")
         self.assertIn("Summary", t["result_text"])
         self.assertFalse(t["exec_dir"])  # a local model has no tools, so no directory
@@ -175,8 +185,7 @@ class E2E(unittest.TestCase):
         self.orch.pool.reset("acc1")
         self.orch.pool.cool_down("acc1", time.time() + 3600)
         tid = self.api("/api/tasks", {"prompt": "Summarize FAILME"})["id"]
-        t = wait_for(lambda: (lambda t: t if t["status"] in ("review", "failed") else None)(
-            self.api(f"/api/tasks/{tid}")))
+        t = self.wait_status(tid)
         self.assertEqual(t["agent"], "quick")  # a text task goes to a quick Claude answer, not a full agent
         self.assertIn("escalated", t["route_reason"])
         self.assertEqual(t["status"], "review")
@@ -203,9 +212,9 @@ class E2E(unittest.TestCase):
         self.assertIn("fix.txt", self.api(f"/api/tasks/{tid}/diff")["diff"])
         self.api(f"/api/tasks/{tid}/merge", {})
         self.assertTrue((repo / "fix.txt").exists())
-        self.api(f"/api/tasks/{tid}/discard", {"delete_branch": True})
-        self.assertFalse(Path(t["exec_dir"]).exists())
-        self.assertNotIn(f"otterraft/task-{tid}", g("branch"))
+        self.assertFalse(Path(t["exec_dir"]).exists())  # merging cleans up the worktree...
+        self.assertNotIn(f"otterraft/task-{tid}", g("branch"))  # ...and the merged branch
+        self.assertIsNone(self.api(f"/api/tasks/{tid}")["exec_dir"])
 
     def test_transient_error_retries_same_task(self):
         tid = self.api("/api/tasks", {"prompt": "OVERLOAD fix app.py", "agent_pref": "claude"})["id"]
@@ -223,7 +232,7 @@ class E2E(unittest.TestCase):
         self.orch.db.update_task(tid, session_id="00000000-dead-beef-0000-000000000000")
         self.api(f"/api/tasks/{tid}/reply", {"message": "also add a test"})
         t = wait_for(lambda: (lambda t: t if t["status"] in ("review", "failed") and t["session_resets"] else None)(
-            self.api(f"/api/tasks/{tid}")))
+            self.api(f"/api/tasks/{tid}")), explain=lambda: task_state(self.orch.db, tid))
         self.assertEqual(t["status"], "review", t.get("error"))
         self.assertIn("session_reset", [e["kind"] for e in self.api(f"/api/tasks/{tid}/events")])
         last = self.calls()[-1]
@@ -262,6 +271,13 @@ class E2E(unittest.TestCase):
                 urllib.request.urlopen(req)
             self.assertEqual(e.exception.code, code)
 
+    def test_malformed_ids_are_404(self):
+        for path, body in (("/api/tasks/abc", None), ("/api/tasks/abc/events", None),
+                           ("/api/tasks/abc/cancel", {}), ("/api/lessons/x", {})):
+            with self.assertRaises(urllib.error.HTTPError) as e:
+                self.api(path, body)
+            self.assertEqual(e.exception.code, 404, path)
+
     def test_dashboard_served(self):
         with urllib.request.urlopen(self.base + "/") as r:
             self.assertIn(b"OtterRaft", r.read())
@@ -274,13 +290,15 @@ class Units(unittest.TestCase):
         cfg_path.write_text(json.dumps({"data_dir": tmp + "/data", "claude_bin": FAKE_CLAUDE,
                                         "shared_config_dir": tmp + "/shared",  # never the real ~/.claude
                                         "accounts": [{"name": "a", "config_dir": tmp + "/a"}], **cfg}))
-        orch = Orchestrator(config.load(cfg_path), DB(Path(tmp) / "o.db"), Bus())
+        # The DB the CLI opens, so CLI commands can be tested against a running orchestrator.
+        orch = Orchestrator(config.load(cfg_path), DB(Path(tmp) / "data" / "otterraft.db"), Bus())
         orch.start()
         self.addCleanup(orch.stop.set)
         return orch
 
     def _done(self, orch, tid):
-        return wait_for(lambda: (lambda t: t if t["status"] in ("review", "failed") else None)(orch.db.task(tid)))
+        return wait_for(lambda: (lambda t: t if t["status"] in ("review", "failed") else None)(orch.db.task(tid)),
+                        explain=lambda: task_state(orch.db, tid))
 
     def test_sonnet_brain_routes_and_answers_text_tasks_quickly(self):
         log = Path(tempfile.mkdtemp()) / "calls.jsonl"
@@ -301,6 +319,40 @@ class Units(unittest.TestCase):
         kinds = [r["kind"] for r in orch.db.query("SELECT kind FROM usage WHERE task_id=? ORDER BY id", (tid,))]
         self.assertEqual(kinds, ["brain", "quick"])
 
+    def test_prune_removes_finished_worktrees_only(self):
+        from otterraft.__main__ import cmd_prune
+        repo = Path(tempfile.mkdtemp()) / "app"
+        repo.mkdir()
+        g = lambda *a: subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True, text=True).stdout
+        g("init", "-q", "-b", "main")
+        (repo / "README.md").write_text("hi\n")
+        g("add", "-A")
+        g("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
+        orch = self._orch()
+        failed, review = (self._done(orch, orch.submit("Fix the bug in app.py", workdir=str(repo),
+                                                       agent_pref="claude")) for _ in range(2))
+        orch.db.update_task(failed["id"], status="failed")
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            cmd_prune(None, orch.cfg)
+        self.assertIn(f"#{failed['id']} failed: removed", out.getvalue())
+        self.assertFalse(Path(failed["exec_dir"]).exists())
+        self.assertIn(failed["branch"], g("branch"))  # unmerged work stays reachable
+        self.assertTrue(Path(review["exec_dir"]).exists())  # still waiting for the user
+
+    def test_chosen_quick_worker_skips_the_brain(self):
+        log = Path(tempfile.mkdtemp()) / "calls.jsonl"
+        os.environ["FAKE_CLAUDE_LOG"] = str(log)
+        self.addCleanup(os.environ.pop, "FAKE_CLAUDE_LOG", None)
+        orch = self._orch()
+        with self.assertLogs("otterraft", "INFO") as logs:  # what `serve` prints to the console
+            tid = orch.submit("Summarize the release notes", agent_pref="quick")
+            t = self._done(orch, tid)
+        self.assertIn(f"#{tid} started: quick on a", [r.getMessage() for r in logs.records])
+        self.assertEqual((t["agent"], t["status"]), ("quick", "review"))
+        calls = [json.loads(l)["args"] for l in log.read_text().splitlines()]
+        self.assertEqual(len(calls), 1)  # the quick answer only; no brain call
+        self.assertEqual(calls[0][calls[0].index("--setting-sources") + 1], "project")  # no user hooks/plugins
+
     def test_agent_model_follows_complexity(self):
         log = Path(tempfile.mkdtemp()) / "calls.jsonl"
         os.environ["FAKE_CLAUDE_LOG"] = str(log)
@@ -316,7 +368,8 @@ class Units(unittest.TestCase):
     def test_quick_answer_escalates_to_agent_when_it_needs_files(self):
         orch = self._orch()
         tid = orch.submit("Summarize QUICKFAIL")
-        t = wait_for(lambda: (lambda t: t if t["agent"] == "claude" and t["status"] == "review" else None)(orch.db.task(tid)))
+        t = wait_for(lambda: (lambda t: t if t["agent"] == "claude" and t["status"] == "review" else None)(orch.db.task(tid)),
+                     explain=lambda: task_state(orch.db, tid))
         self.assertIn("escalated from quick", t["route_reason"])
 
     def test_brain_falls_back_to_keywords_without_accounts(self):
@@ -363,7 +416,7 @@ class Units(unittest.TestCase):
         orch.start()
         try:
             tid = orch.submit("Fix app.py", agent_pref="claude")
-            t = wait_for(lambda: (lambda t: t if t["status"] in ("review", "failed") else None)(orch.db.task(tid)))
+            t = self._done(orch, tid)
             self.assertEqual((t["status"], t["account"]), ("review", "ok"), t.get("error"))
             # One login failure (the brain's call) only rests the account; a second one parks it.
             self.assertIn("login check failed", orch.pool.state("old")["last_error"])
@@ -427,9 +480,10 @@ class Units(unittest.TestCase):
         router = Router({"brain": {}, "router": {}}, mock.Mock(), mock.Mock(enabled=False), pool)
         with mock.patch.dict(os.environ, {"OTTERRAFT_BRAIN_API_KEY": "sk-bad"}), \
                 mock.patch("otterraft.agents.claude.quick_call", fake_quick_call), \
-                mock.patch("builtins.print"):
+                self.assertLogs("otterraft", "WARNING") as logs:
             self.assertEqual(router.classify("Summarize this")["source"], "claude sonnet")
             router.classify("Summarize that")
+        self.assertEqual(len(logs.records), 1)  # said once, visibly
         self.assertEqual(used, ["brain-api", "sub", "sub"])  # the bad key is tried once, not per task
         pool.login_failed.assert_not_called()  # the key's failure is not the account's
 
@@ -466,10 +520,10 @@ class Units(unittest.TestCase):
             self.assertEqual((quick["agent"], quick["status"], agent["status"]), ("quick", "review", "review"),
                              agent.get("error"))
             tid = orch.submit("Summarize SLOW notes", agent_pref="quick")
-            wait_for(lambda: orch.db.task(tid)["status"] == "running" and tid in orch.active)
+            wait_for(lambda: orch.db.task(tid)["status"] == "running" and tid in orch.active, explain=lambda: task_state(orch.db, tid))
             t0 = time.time()
             orch.cancel(tid)
-            wait_for(lambda: tid not in orch.busy)
+            wait_for(lambda: tid not in orch.busy, explain=lambda: task_state(orch.db, tid))
             self.assertLess(time.time() - t0, 1.5)  # the CLI under cmd.exe died too, closing our pipes
 
     def test_cli_login_errors_are_recognised(self):
@@ -492,10 +546,10 @@ class Units(unittest.TestCase):
         notified = []
         orch.notify = lambda title, body: notified.append(title)
         tid = orch.submit("Summarize SLOW notes", agent_pref="quick")
-        wait_for(lambda: orch.db.task(tid)["status"] == "running" and tid in orch.active)
+        wait_for(lambda: orch.db.task(tid)["status"] == "running" and tid in orch.active, explain=lambda: task_state(orch.db, tid))
         t0 = time.time()
         orch.cancel(tid)
-        wait_for(lambda: tid not in orch.busy)
+        wait_for(lambda: tid not in orch.busy, explain=lambda: task_state(orch.db, tid))
         self.assertLess(time.time() - t0, 1.5)  # the CLI was killed, not waited for (it sleeps 2 s)
         self.assertEqual(orch.db.task(tid)["status"], "cancelled")
         kinds = [e["kind"] for e in orch.db.events(tid)]
@@ -505,7 +559,7 @@ class Units(unittest.TestCase):
     def test_reply_right_after_cancel_is_not_lost(self):
         orch = self._orch()
         tid = orch.submit("Summarize SLOW notes", agent_pref="quick")
-        wait_for(lambda: orch.db.task(tid)["status"] == "running" and tid in orch.active)
+        wait_for(lambda: orch.db.task(tid)["status"] == "running" and tid in orch.active, explain=lambda: task_state(orch.db, tid))
         orch.cancel(tid)
         orch.reply(tid, "Actually, keep going")
         t = self._done(orch, tid)

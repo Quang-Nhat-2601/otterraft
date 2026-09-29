@@ -131,11 +131,6 @@ class AccountPool:
     def reset(self, name):
         self.db.execute("UPDATE account_state SET cooldown_until=0, last_error=NULL WHERE name=?", (name,))
 
-    def next_free_at(self):
-        """Earliest time any account comes out of cooldown (for the UI)."""
-        times = [self.state(a["name"])["cooldown_until"] for a in self.accounts]
-        return min(times) if times else None
-
 
 # Everything that shapes how Claude Code works, except the login itself.
 SHARED_ITEMS = ["skills", "agents", "commands", "output-styles", "plugins", "CLAUDE.md", "settings.json"]

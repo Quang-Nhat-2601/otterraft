@@ -1,4 +1,4 @@
-"""CLI: otterraft {init,serve,add,accounts,login,doctor,bench} (or python -m otterraft ...)"""
+"""CLI: otterraft {init,serve,add,accounts,login,doctor,bench,prune} (or python -m otterraft ...)"""
 import argparse
 import json
 import os
@@ -8,7 +8,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import config
+from . import config, workspace
 from .accounts import sync_shared
 from .bus import Bus
 from .db import DB
@@ -30,7 +30,9 @@ def cmd_init(args, _cfg):
 
 
 def cmd_serve(args, cfg):
+    import logging
     from .runner import Orchestrator
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
     from .server import serve
     orch = Orchestrator(cfg, open_db(cfg), Bus())
     orch.start()
@@ -88,6 +90,23 @@ def cmd_login(args, cfg):
                          "AND last_error LIKE 'login%'", (acc["name"],))
     for line in sync_shared(cfg):
         print(line)
+
+
+def cmd_prune(args, cfg):
+    """Remove the worktrees of finished tasks. A branch goes too once merged; otherwise it stays,
+    so the work can still be merged or inspected with git."""
+    db = open_db(cfg)
+    rows = db.query("SELECT * FROM tasks WHERE exec_dir IS NOT NULL AND branch IS NOT NULL "
+                    "AND status IN ('done', 'failed', 'cancelled')")
+    for t in rows:
+        try:
+            workspace.remove(t, delete_branch=bool(t.get("merged_at")))
+            db.update_task(t["id"], exec_dir=None)
+            print(f"#{t['id']} {t['status']}: removed {t['exec_dir']}"
+                  + ("" if t.get("merged_at") else f" (branch {t['branch']} kept)"))
+        except workspace.WorkspaceError as e:
+            print(f"#{t['id']}: {e}")
+    print(f"{len(rows)} finished task worktree(s); tasks waiting for review keep theirs")
 
 
 def cmd_doctor(args, cfg):
@@ -221,12 +240,13 @@ def main():
     l = sub.add_parser("login", help="log an account in (opens Claude Code with its config dir)")
     l.add_argument("account")
     sub.add_parser("doctor", help="check CLI, logins and local models")
+    sub.add_parser("prune", help="remove the git worktrees of finished tasks")
     b = sub.add_parser("bench", help="measure local models on this machine")
     b.add_argument("-m", "--models", help="comma-separated Ollama tags (default: the configured ones)")
     args = ap.parse_args()
     cfg = config.load(args.config) if args.cmd != "init" else None
     {"init": cmd_init, "serve": cmd_serve, "add": cmd_add, "accounts": cmd_accounts,
-     "login": cmd_login, "doctor": cmd_doctor, "bench": cmd_bench}[args.cmd](args, cfg)
+     "login": cmd_login, "doctor": cmd_doctor, "bench": cmd_bench, "prune": cmd_prune}[args.cmd](args, cfg)
 
 
 if __name__ == "__main__":

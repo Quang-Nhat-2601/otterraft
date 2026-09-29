@@ -115,8 +115,8 @@ def merge(task):
 
 
 def remove(task, delete_branch):
-    top = Path(task["exec_dir"])
-    wt = git(["rev-parse", "--show-toplevel"], top) if top.exists() else None
+    top = Path(task["exec_dir"]) if task.get("exec_dir") else None
+    wt = git(["rev-parse", "--show-toplevel"], top) if top and top.exists() else None
     if wt:
         git(["worktree", "remove", "--force", wt], task["base_repo"])
     git(["worktree", "prune"], task["base_repo"])

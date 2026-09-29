@@ -23,7 +23,7 @@ DEFAULTS = {
         {"name": "main", "config_dir": None, "priority": 1, "max_parallel": 1, "enabled": True},
     ],
     # The "brain" classifies every task and picks who does it. "claude" = one lean Claude call
-    # (~7K tokens, ~2s; no tools, skills or MCP loaded) on whichever account is free, falling
+    # (~4.4K tokens, ~2s; no tools, skills, MCP or user hooks) on whichever account is free, falling
     # back to a local model and then to keyword rules. "local" or "keywords" skip Claude.
     "brain": {"provider": "claude", "model": "sonnet", "timeout_sec": 60},
     # Text-only tasks (summaries, translations, commit messages, explanations) are answered by

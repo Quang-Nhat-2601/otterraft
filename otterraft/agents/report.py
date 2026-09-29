@@ -25,7 +25,7 @@ You are running unattended under OtterRaft, a task orchestrator. Nobody is watch
 ```
 """.strip()
 
-_BLOCK = re.compile(r"```(?:otterraft|orchestrator)-report\s*(\{.*?\})\s*```", re.S)
+_BLOCK = re.compile(r"```otterraft-report\s*(\{.*?\})\s*```", re.S)
 _ANY_JSON = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.S)
 
 

@@ -8,9 +8,9 @@ Sea otters hold hands while they sleep so the current doesn't pull them apart; a
 
 - **Switches accounts for you.** Use several Claude Code accounts, each with its own login. When an account's 5-hour window gets close to full (90% by default), or hits its limit, OtterRaft moves to the next account. A task that was mid-way **carries its session over and continues** instead of starting again.
 - **Runs unattended.** Claude runs headless in `--permission-mode auto`, so it never stops to ask for permission. Tools that get blocked are collected as *permission suggestions*: approve one once and it is not blocked again.
-- **Lets Claude dispatch.** Claude Sonnet classifies each task with one lean call (about 7K input tokens and 2–3 seconds, measured), then sends it to the right worker:
+- **Lets Claude dispatch.** Claude Sonnet classifies each task with one lean call (about 4.4K tokens of context and 2–3 seconds, measured; mostly read from cache when tasks follow each other). A task where you pick the worker yourself skips it, then sends it to the right worker:
   - **Claude agent** for work that edits code or runs commands. Tasks rated complexity ≤3 run on Sonnet, which saves your stronger model's quota for hard work.
-  - **Claude quick answer** for text-only work such as summaries, translations and commit messages: about 7K input tokens instead of the 25K+ that even a trivial agent session costs.
+  - **Claude quick answer** for text-only work such as summaries, translations and commit messages: about 4.4K tokens instead of the 25K+ that even a trivial agent session costs.
   - **Local model** (optional, off by default) if you want simple work to stay on your machine.
 - **Shows a live dashboard.** Watch each agent's tool calls and commands as they happen, follow progress through the agent's own todo list, and see usage and success rates per account and per model.
 - **Reports after every task.** The report says how the agent understood the request, what it produced, which files changed, and the result of your verify command. It also includes a **checklist of test cases for you to try**.
@@ -52,7 +52,7 @@ ccusage works well alongside OtterRaft if you want more statistics.
 ┌────────────────────────────┴──────────────▼─────────────────────────┐
 │ OtterRaft (otterraft serve)                                         │
 │                                                                     │
-│  Brain: Sonnet, one lean call (no tools/skills/MCP, ~7K tokens)     │
+│  Brain: Sonnet, one lean call (no tools/skills/MCP, ~4.4K tokens)   │
 │     fallback: local model → keyword rules; + learned success stats  │
 │     │                                                               │
 │     ├── Claude agent ── Account pool ── acc1 (CLAUDE_CONFIG_DIR=…)  │
@@ -122,7 +122,7 @@ otterraft serve               # prints the dashboard link, including its access 
 
 ### Optional: local models
 
-**You don't need them.** Sonnet dispatches tasks and answers text-only ones for very little quota: a classification is about 7K input tokens, a small fraction of a coding task. On a CPU-only machine it is also faster than a local model (2–3 s against roughly 5–30 s) and doesn't take 13 GB of RAM.
+**You don't need them.** Sonnet dispatches tasks and answers text-only ones for very little quota: a classification is about 4.4K tokens, a small fraction of a coding task. On a CPU-only machine it is also faster than a local model (2–3 s against roughly 5–30 s) and doesn't take 13 GB of RAM.
 
 Turn local models on (`"local": {"enabled": true}`) when you need data to stay on your machine, need to work offline, or have lots of repetitive text work. They only do simple, text-only work: summaries, translations, explanations, commit messages, regexes. Anything that reads or changes code still goes to Claude.
 
@@ -169,6 +169,7 @@ otterraft add "Fix the login 500 when the email has spaces, and add a test" -w ~
 otterraft add "Summarize this CHANGELOG" -a quick
 git diff | otterraft add - -t "Write a commit message"
 otterraft accounts            # account status and cooldowns
+otterraft prune               # remove the worktrees of finished tasks
 ```
 
 Tasks can be written in any language. The keyword fallback also understands Vietnamese.
@@ -184,8 +185,10 @@ Tasks can be written in any language. The keyword fallback also understands Viet
 
 When the workdir is a git repo, the agent works on branch `otterraft/task-<id>` in its own folder under `~/.otterraft/worktrees/`. When it finishes, OtterRaft commits the changes to that branch, skipping `__pycache__`, `node_modules`, `.venv` and similar. On the dashboard you can:
 - **Show the diff**.
-- **Merge into the base branch**. This only runs when your checkout is on that branch with no uncommitted changes. On a conflict, OtterRaft aborts the merge and nothing changes.
-- **Remove the worktree**.
+- **Merge into the base branch**. This only runs when your checkout is on that branch with no uncommitted changes. On a conflict, OtterRaft aborts the merge and nothing changes. After a merge, the worktree and its branch are removed.
+- **Remove the worktree** without merging (the branch is kept).
+
+`otterraft prune` removes the worktrees of finished tasks (done, failed, cancelled) in one go; unmerged branches stay, and tasks waiting for your review keep theirs.
 
 Worktrees start from `HEAD`. A `CLAUDE.md` with uncommitted changes (for example one the Reflection Coach just updated) is copied into new worktrees so agents see it right away, and it is never committed on a task branch. Commit it yourself when you're happy with it.
 
@@ -270,6 +273,8 @@ Never expose this port to the public internet: anyone who reaches the dashboard 
 ```bash
 python -m unittest discover tests      # end-to-end, against a fake claude CLI and a fake Ollama (python3 on some Linux/macOS)
 ```
+
+Releasing: set the version in `pyproject.toml`, then push a matching tag (`git tag v0.2.0 && git push origin v0.2.0`). The `release` workflow tests, builds and publishes to PyPI through Trusted Publishing.
 
 Code map:
 

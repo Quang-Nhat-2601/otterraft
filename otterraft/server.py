@@ -12,6 +12,18 @@ from . import config, workspace
 STATIC = Path(__file__).parent / "static"
 
 
+class NotFound(Exception):
+    pass
+
+
+def _int(s):
+    """An id from the URL; /api/tasks/abc is a 404, not a crashed request."""
+    try:
+        return int(s)
+    except ValueError:
+        raise NotFound from None
+
+
 def stats(orch):
     db, now = orch.db, time.time()
     accounts = []
@@ -93,6 +105,18 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- routes ------------------------------------------------------------------
     def do_GET(self):
+        try:
+            self._get()
+        except NotFound:
+            self._send(404, {"error": "not found"})
+
+    def do_POST(self):
+        try:
+            self._post()
+        except NotFound:
+            self._send(404, {"error": "not found"})
+
+    def _get(self):
         url = urlparse(self.path)
         p, q = url.path, parse_qs(url.query)
         if p in ("/", "/index.html"):
@@ -103,7 +127,7 @@ class Handler(BaseHTTPRequestHandler):
         if p == "/api/tasks":
             return self._send(200, o.db.tasks())
         if p.startswith("/api/tasks/") and p.endswith("/diff"):
-            t = o.db.task(int(p.split("/")[3]))
+            t = o.db.task(_int(p.split("/")[3]))
             if not t or not t.get("branch") or not t.get("exec_dir"):
                 return self._send(404, {"error": "no worktree for this task"})
             try:
@@ -114,10 +138,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, o.db.query("SELECT * FROM proposals ORDER BY "
                                               "CASE status WHEN 'pending' THEN 0 ELSE 1 END, id DESC LIMIT 200"))
         if p.startswith("/api/tasks/") and p.endswith("/events"):
-            tid = int(p.split("/")[3])
-            return self._send(200, o.db.events(tid, int(q.get("after", ["0"])[0])))
+            tid = _int(p.split("/")[3])
+            return self._send(200, o.db.events(tid, _int(q.get("after", ["0"])[0])))
         if p.startswith("/api/tasks/"):
-            t = o.db.task(int(p.split("/")[3]))
+            t = o.db.task(_int(p.split("/")[3]))
             return self._send(200 if t else 404, t or {"error": "not found"})
         if p == "/api/stats":
             return self._send(200, stats(o))
@@ -129,7 +153,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._stream()
         self._send(404, {"error": "not found"})
 
-    def do_POST(self):
+    def _post(self):
         if not self._authed():
             return self._send(401, {"error": "unauthorized"})
         if not (self.headers.get("Content-Type") or "").startswith("application/json"):
@@ -147,7 +171,7 @@ class Handler(BaseHTTPRequestHandler):
                            b.get("agent_pref", "auto"), b.get("verify_cmd", ""))
             return self._send(201, {"id": tid})
         if len(parts) == 4 and parts[:2] == ["api", "tasks"]:
-            tid, action = int(parts[2]), parts[3]
+            tid, action = _int(parts[2]), parts[3]
             if not o.db.task(tid):
                 return self._send(404, {"error": "not found"})
             if action == "cancel":
@@ -181,7 +205,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(201 if tid else 409, {"id": tid} if tid else
                               {"error": "no finished tasks in the last 30 days to reflect on"})
         if len(parts) == 3 and parts[:2] == ["api", "proposals"]:
-            pid, act = int(parts[2]), b.get("action")
+            pid, act = _int(parts[2]), b.get("action")
             try:
                 {"apply": o.coach.apply, "reject": o.coach.reject, "rollback": o.coach.rollback}[act](pid)
             except KeyError:
@@ -194,7 +218,7 @@ class Handler(BaseHTTPRequestHandler):
             lid = o.learner.add_lesson(b.get("text", ""), b.get("scope") or "global", b.get("tags") or [])
             return self._send(201, {"id": lid})
         if len(parts) == 3 and parts[:2] == ["api", "lessons"]:
-            lid = int(parts[2])
+            lid = _int(parts[2])
             if b.get("delete"):
                 o.db.execute("DELETE FROM lessons WHERE id=?", (lid,))
             elif b.get("approve"):
@@ -203,7 +227,7 @@ class Handler(BaseHTTPRequestHandler):
                 o.db.execute("UPDATE lessons SET enabled=? WHERE id=?", (1 if b.get("enabled") else 0, lid))
             return self._send(200, {"ok": True})
         if len(parts) == 3 and parts[:2] == ["api", "permissions"]:
-            row = o.db.one("SELECT * FROM permission_suggestions WHERE id=?", (int(parts[2]),))
+            row = o.db.one("SELECT * FROM permission_suggestions WHERE id=?", (_int(parts[2]),))
             if not row:
                 return self._send(404, {"error": "not found"})
             status = "approved" if b.get("approve") else "dismissed"
