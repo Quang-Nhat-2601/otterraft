@@ -8,20 +8,13 @@ import time
 import uuid
 from pathlib import Path
 
+from ..config import claude_command
 from ..failures import classify
 
 
-def cli(cfg):
-    """claude_bin as an argv prefix. A name is looked up on PATH first: on Windows, process
-    creation alone finds only .exe, not the claude.cmd an npm install puts there. A list runs
-    a wrapper as the CLI, e.g. [python, fake_claude.py]."""
-    b = cfg["claude_bin"]
-    return list(b) if isinstance(b, list) else [shutil.which(b) or b]
-
-
 def kill_tree(proc):
-    """Stop the CLI and everything it started. On Windows an npm install runs claude.cmd, which
-    runs node: killing cmd.exe alone leaves node running with our pipes still open."""
+    """Stop the CLI and everything it started. On Windows npm's claude.cmd (when its cli.js
+    can't be found) runs node: killing cmd.exe alone leaves node running with our pipes open."""
     if proc.poll() is not None:
         return
     if os.name == "nt":
@@ -97,7 +90,7 @@ class ClaudeRun:
     def command(self, system_file=None):
         c = self.cfg["claude"]
         # The prompt goes through stdin: Windows caps a whole command line at ~32K chars.
-        cmd = [*cli(self.cfg), "-p", "--output-format", "stream-json",
+        cmd = [*claude_command(self.cfg), "-p", "--output-format", "stream-json",
                "--verbose", "--permission-mode", c["permission_mode"]]
         if c.get("max_turns"):
             cmd += ["--max-turns", str(c["max_turns"])]
@@ -311,7 +304,7 @@ def _quick_call(cfg, account, system_file, prompt, model, timeout, on_start):
     # A neutral cwd, so no project CLAUDE.md or settings get pulled in.
     cwd = Path(cfg["data_dir"]) / "brain"
     cwd.mkdir(parents=True, exist_ok=True)
-    cmd = [*cli(cfg), "-p", "--output-format", "json", "--max-turns", "1",
+    cmd = [*claude_command(cfg), "-p", "--output-format", "json", "--max-turns", "1",
            "--tools", "", "--system-prompt-file", str(system_file), "--disable-slash-commands",
            "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}']
     if model:

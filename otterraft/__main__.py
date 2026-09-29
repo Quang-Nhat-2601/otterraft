@@ -10,7 +10,6 @@ from pathlib import Path
 
 from . import config
 from .accounts import sync_shared
-from .agents.claude import cli
 from .bus import Bus
 from .db import DB
 
@@ -84,7 +83,7 @@ def cmd_login(args, cfg):
         Path(acc["config_dir"]).mkdir(parents=True, exist_ok=True)
         env["CLAUDE_CONFIG_DIR"] = acc["config_dir"]
     print(f"Starting Claude Code for account '{acc['name']}'. Type /login, sign in, then /exit.")
-    subprocess.call(cli(cfg), env=env)
+    subprocess.call(config.claude_command(cfg), env=env)
     open_db(cfg).execute("UPDATE account_state SET cooldown_until=0, last_error=NULL WHERE name=? "
                          "AND last_error LIKE 'login%'", (acc["name"],))
     for line in sync_shared(cfg):
@@ -94,8 +93,12 @@ def cmd_login(args, cfg):
 def cmd_doctor(args, cfg):
     from .agents.local import LocalLLM
     ok = True
-    path = shutil.which(cli(cfg)[0])
-    print(f"[{'ok' if path else 'X '}] claude CLI: {path or 'not found'}")
+    cmd = config.claude_command(cfg)
+    path = shutil.which(cmd[0])
+    print(f"[{'ok' if path else 'X '}] claude CLI: {' '.join(cmd) if path else 'not found'}")
+    if path and os.name == "nt" and path.lower().endswith((".cmd", ".bat")):
+        print("[--] claude is npm's claude.cmd and the cli.js behind it was not found, so it runs "
+              "through cmd.exe. That works; the native Windows installer is the sturdier option")
     ok &= bool(path)
     for a in cfg["accounts"]:
         li = _logged_in(a)
