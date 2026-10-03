@@ -4,121 +4,185 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OtterRaft</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 <style>
 :root {
   color-scheme: light;
-  --bg: #f6f6f4; --surface: #fcfcfb; --surface-2: #f0efec; --border: #e2e1dc;
-  --text: #0b0b0b; --text-2: #52514e; --muted: #8a8984;
-  --accent: #2a78d6; --series-1: #2a78d6; --series-2: #eb6834;
-  --good: #1f8a3b; --warn: #b87400; --bad: #c93838; --info: #2a78d6;
-  --good-bg: #e6f4ea; --warn-bg: #fdf1dc; --bad-bg: #fbe5e5; --info-bg: #e3eefb;
+  --bg: #f2f5f6; --surface: #ffffff; --surface-2: #e9eff1; --border: #d5dfe3;
+  --text: #102029; --text-2: #46555f; --muted: #5b6973;
+  --accent: #0a6c7a; --accent-hover: #085a66; --series-1: #0a6c7a; --series-2: #d9864a;
+  --good: #1b7a3d; --warn: #9a5b00; --bad: #b42b2b; --info: #0a6c7a;
+  --good-bg: #e3f3e8; --warn-bg: #fbefd9; --bad-bg: #f9e3e3; --info-bg: #dff0f2;
+  --shadow: 0 1px 2px rgba(16, 32, 41, .06); --on-accent: #ffffff;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --bg: #121211; --surface: #1a1a19; --surface-2: #242422; --border: #33332f;
-    --text: #ffffff; --text-2: #c3c2b7; --muted: #8d8c85;
-    --accent: #3987e5; --series-1: #3987e5; --series-2: #d95926;
-    --good: #4cc36a; --warn: #e0a53a; --bad: #ec6b6b; --info: #6aa9ef;
-    --good-bg: #16301d; --warn-bg: #33270f; --bad-bg: #371818; --info-bg: #15263a;
+    --bg: #0b141a; --surface: #111d24; --surface-2: #18272f; --border: #263a45;
+    --text: #e6eef2; --text-2: #adbcc5; --muted: #8b9ba6;
+    --accent: #3fa9b6; --accent-hover: #5bbcc8; --series-1: #3fa9b6; --series-2: #e09a64;
+    --good: #5ac47d; --warn: #e2a948; --bad: #ef7676; --info: #5bbcc8;
+    --good-bg: #13301f; --warn-bg: #33260e; --bad-bg: #3a1818; --info-bg: #102f36; --on-accent: #06222a;
+    --shadow: none;
   }
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #121211; --surface: #1a1a19; --surface-2: #242422; --border: #33332f;
-  --text: #ffffff; --text-2: #c3c2b7; --muted: #8d8c85;
-  --accent: #3987e5; --series-1: #3987e5; --series-2: #d95926;
-  --good: #4cc36a; --warn: #e0a53a; --bad: #ec6b6b; --info: #6aa9ef;
-  --good-bg: #16301d; --warn-bg: #33270f; --bad-bg: #371818; --info-bg: #15263a;
+  --bg: #0b141a; --surface: #111d24; --surface-2: #18272f; --border: #263a45;
+  --text: #e6eef2; --text-2: #adbcc5; --muted: #8b9ba6;
+  --accent: #3fa9b6; --accent-hover: #5bbcc8; --series-1: #3fa9b6; --series-2: #e09a64;
+  --good: #5ac47d; --warn: #e2a948; --bad: #ef7676; --info: #5bbcc8;
+  --good-bg: #13301f; --warn-bg: #33260e; --bad-bg: #3a1818; --info-bg: #102f36; --on-accent: #06222a;
+  --shadow: none;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text);
-  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-header { position: sticky; top: 0; z-index: 5; background: var(--surface); border-bottom: 1px solid var(--border);
-  display: flex; align-items: center; gap: 12px; padding: 10px 16px; flex-wrap: wrap; }
-header h1 { font-size: 16px; margin: 0; font-weight: 650; }
-nav { display: flex; gap: 4px; }
-nav button { background: none; border: 0; padding: 6px 12px; border-radius: 8px; color: var(--text-2); cursor: pointer; font: inherit; }
-nav button.on { background: var(--surface-2); color: var(--text); font-weight: 600; }
-.live { margin-left: auto; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  font: 15px/1.55 "Figtree", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+header { position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--surface) 88%, transparent);
+  backdrop-filter: blur(8px); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 20px; padding: 10px 24px; flex-wrap: wrap; }
+header h1 { font-size: 18px; margin: 0; font-weight: 700; letter-spacing: -.01em; display: flex; align-items: center; gap: 8px; }
+nav { display: flex; gap: 2px; }
+nav button { background: none; border: 0; padding: 7px 14px; border-radius: 8px; color: var(--text-2); cursor: pointer;
+  font: inherit; font-weight: 500; }
+nav button:hover { color: var(--text); background: var(--surface-2); }
+nav button.on { color: var(--accent); background: var(--info-bg); font-weight: 600; }
+.live { margin-left: auto; font-size: 13px; color: var(--text-2); display: flex; align-items: center; gap: 6px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
-.dot.on { background: var(--good); }
-main { max-width: 1200px; margin: 0 auto; padding: 16px; }
-.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; }
-.card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-2); margin: 0 0 10px; font-weight: 600; }
-.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 14px; }
-.kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px; }
-.kpi .v { font-size: 24px; font-weight: 650; font-variant-numeric: tabular-nums; }
-.kpi .l { font-size: 12px; color: var(--text-2); }
-label { display: block; font-size: 12px; color: var(--text-2); margin: 8px 0 4px; }
-input, textarea, select { width: 100%; background: var(--surface-2); color: var(--text); border: 1px solid var(--border);
-  border-radius: 8px; padding: 8px 10px; font: inherit; }
-textarea { min-height: 90px; resize: vertical; }
-.row { display: grid; grid-template-columns: 2fr 1fr 1.5fr; gap: 10px; }
-@media (max-width: 700px) { .row { grid-template-columns: 1fr; } }
-.btn { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 8px 14px; font: inherit; font-weight: 600; cursor: pointer; }
-.btn.ghost { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); font-weight: 500; }
-.btn.bad { background: var(--bad); }
-.btn.good { background: var(--good); }
+.dot.on { background: var(--good); box-shadow: 0 0 0 3px var(--good-bg); }
+main { max-width: 1180px; margin: 0 auto; padding: 24px; }
+
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 18px 20px; margin-bottom: 20px; box-shadow: var(--shadow); }
+.card h2 { font-size: 17px; color: var(--text); margin: 0 0 14px; font-weight: 650; letter-spacing: -.005em; }
+
+/* one strip divided by hairlines instead of a row of identical cards */
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; margin-bottom: 20px;
+  background: var(--border); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; box-shadow: var(--shadow); }
+.kpi { background: var(--surface); padding: 14px 18px; }
+.kpi .v { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -.02em; line-height: 1.15; }
+.kpi .l { font-size: 14px; color: var(--text-2); font-weight: 500; }
+.kpi .small { margin-top: 2px; }
+
+label { display: block; font-size: 14px; color: var(--text-2); font-weight: 500; margin: 10px 0 6px; }
+input, textarea, select { width: 100%; background: var(--surface); color: var(--text); border: 1px solid var(--border);
+  border-radius: 10px; padding: 10px 12px; font: inherit; }
+input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--info-bg); }
+textarea { min-height: 96px; resize: vertical; line-height: 1.6; }
+::placeholder { color: var(--muted); opacity: 1; }
+
+/* Claude Code-style prompt: one framed box, actions on its bottom edge */
+.prompt-box { border: 1px solid var(--border); border-radius: 14px; background: var(--surface); overflow: hidden;
+  transition: border-color .15s, box-shadow .15s; }
+.prompt-box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 4px var(--info-bg); }
+.prompt-box textarea { border: 0; border-radius: 0; background: transparent; box-shadow: none; min-height: 40vh;
+  font-size: 16px; padding: 16px 18px; display: block; }
+.prompt-box textarea:focus { box-shadow: none; }
+.prompt-box .thumbs:not(:empty) { margin: 0; padding: 0 18px 12px; }
+.prompt-bar { display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 12px; border-top: 1px solid var(--border); background: var(--surface-2); }
+.prompt-bar #fSubmit { margin-left: auto; }
+.prompt-bar .btn.ghost { padding: 6px 12px; }
+
+textarea.dropping { outline: 2px dashed var(--accent); outline-offset: -6px; }
+.thumbs { display: flex; flex-wrap: wrap; gap: 10px; }
+.thumbs:not(:empty) { margin-top: 10px; }
+.thumb { position: relative; }
+.thumb img { height: 72px; max-width: 180px; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); display: block; }
+.thumb button { position: absolute; top: -8px; right: -8px; width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text); font-size: 14px; line-height: 1; cursor: pointer; padding: 0; }
+.attach { cursor: pointer; }
+.row { display: grid; grid-template-columns: 2fr 1fr 1.5fr; gap: 12px; }
+@media (max-width: 700px) { .row { grid-template-columns: 1fr; } main { padding: 16px; } header { padding: 10px 16px; } }
+
+.btn { background: var(--accent); color: var(--on-accent); border: 1px solid transparent; border-radius: 10px; padding: 9px 16px;
+  font: inherit; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: background .15s; }
+.btn:hover { background: var(--accent-hover); }
+.btn.ghost { background: var(--surface); color: var(--text); border-color: var(--border); font-weight: 500; }
+.btn.ghost:hover { background: var(--surface-2); }
+.btn.bad { background: var(--bad); } .btn.good { background: var(--good); }
+.btn.bad:hover, .btn.good:hover { filter: brightness(1.08); }
 .btn:disabled { opacity: .5; cursor: default; }
-.actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
-.tasks { display: flex; flex-direction: column; gap: 8px; }
-.task { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; padding: 10px 12px; border: 1px solid var(--border);
-  border-radius: 10px; cursor: pointer; background: var(--surface); }
-.task:hover { border-color: var(--accent); }
-.task .t { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.task .m { font-size: 12px; color: var(--text-2); display: flex; gap: 10px; flex-wrap: wrap; }
+.actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 14px; }
+
+.tasks { display: flex; flex-direction: column; gap: 14px; }
+/* the left edge carries the task's state */
+.task { display: grid; grid-template-columns: 1fr auto; gap: 8px 16px; padding: 16px 20px 16px 18px; border: 1px solid var(--border);
+  border-left: 4px solid var(--border); border-radius: 10px; cursor: pointer; background: var(--surface); transition: border-color .15s, background .15s; }
+.task:hover { background: var(--surface-2); }
+.task[data-status="running"] { border-left-color: var(--info); }
+.task[data-status="queued"] { border-left-color: var(--muted); }
+.task[data-status="review"], .task[data-status="needs_input"] { border-left-color: var(--warn); }
+.task[data-status="done"] { border-left-color: var(--good); }
+.task[data-status="failed"], .task[data-status="cancelled"] { border-left-color: var(--bad); }
+.task .t { font-weight: 600; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task .m { font-size: 13px; color: var(--text-2); display: flex; gap: 6px 14px; flex-wrap: wrap; align-items: center; }
+.task .m .proj { background: var(--info-bg); color: var(--info); border-radius: 999px; padding: 1px 10px; font-weight: 600; }
+/* a progress bar only means something while the task moves */
+.task:not([data-status="running"]):not([data-status="queued"]) .bar { display: none; }
+.task .t .id { color: var(--muted); font-weight: 500; margin-right: 4px; }
 .bar { grid-column: 1 / -1; height: 4px; background: var(--surface-2); border-radius: 2px; overflow: hidden; }
 .bar > i { display: block; height: 100%; background: var(--accent); border-radius: 2px; transition: width .4s; }
-.badge { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
+
+.badge { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; font-weight: 600; padding: 2px 10px; border-radius: 999px; white-space: nowrap; }
 .s-queued { background: var(--surface-2); color: var(--text-2); }
 .s-running { background: var(--info-bg); color: var(--info); }
 .s-needs_input, .s-review { background: var(--warn-bg); color: var(--warn); }
 .s-done { background: var(--good-bg); color: var(--good); }
 .s-failed, .s-cancelled { background: var(--bad-bg); color: var(--bad); }
-.filters { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
-.chip { border: 1px solid var(--border); background: var(--surface); color: var(--text-2); border-radius: 999px; padding: 3px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+.filters { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+.chip { border: 1px solid var(--border); background: var(--surface); color: var(--text-2); border-radius: 999px; padding: 4px 12px;
+  font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; }
+.chip:hover { color: var(--text); border-color: var(--text-2); }
 .chip.on { background: var(--text); color: var(--bg); border-color: var(--text); }
+
 /* detail drawer */
-#detail { position: fixed; inset: 0; background: rgba(0,0,0,.35); display: none; z-index: 10; }
+#detail { position: fixed; inset: 0; background: rgba(8, 20, 26, .45); display: none; z-index: 10; }
 #detail.open { display: block; }
-#detail .panel { position: absolute; right: 0; top: 0; bottom: 0; width: min(760px, 100%); background: var(--bg);
-  overflow-y: auto; padding: 16px; border-left: 1px solid var(--border); }
+#detail .panel { position: absolute; right: 0; top: 0; bottom: 0; width: min(800px, 100%); background: var(--bg);
+  overflow-y: auto; padding: 20px 24px; border-left: 1px solid var(--border); }
+#detail.open .panel { animation: drawer .22s ease-out; }
+@keyframes drawer { from { transform: translateX(24px); opacity: .6; } }
+@media (prefers-reduced-motion: reduce) { #detail.open .panel { animation: none; } * { transition: none !important; } }
 .close { float: right; }
-.kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; font-size: 13px; }
-.kv dt { color: var(--text-2); } .kv dd { margin: 0; overflow-wrap: anywhere; }
-.log { font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; max-height: 380px; overflow-y: auto;
-  background: var(--surface-2); border-radius: 8px; padding: 8px; }
-.log div { padding: 2px 0; border-bottom: 1px dashed var(--border); white-space: pre-wrap; overflow-wrap: anywhere; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px; font-size: 14px; }
+.kv dt { color: var(--text-2); font-weight: 500; } .kv dd { margin: 0; overflow-wrap: anywhere; }
+.log { font: 12.5px/1.55 "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; max-height: 420px; overflow-y: auto;
+  background: var(--surface-2); border-radius: 10px; padding: 10px 12px; }
+.log div { padding: 3px 0; border-bottom: 1px solid var(--border); white-space: pre-wrap; overflow-wrap: anywhere; }
 .log .k { color: var(--accent); font-weight: 600; margin-right: 6px; }
 .log .ts { color: var(--muted); margin-right: 6px; }
-.todo { display: flex; gap: 8px; font-size: 13px; padding: 2px 0; }
+.todo { display: flex; gap: 8px; font-size: 14px; padding: 3px 0; }
 .todo.completed { color: var(--muted); text-decoration: line-through; }
-.todo.in_progress { font-weight: 600; }
-.tc { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; background: var(--surface); }
-.tc label { display: flex; gap: 8px; align-items: flex-start; color: var(--text); font-size: 14px; margin: 0; font-weight: 600; }
-.tc input { width: auto; margin-top: 4px; }
-.tc ol { margin: 6px 0 4px 22px; padding: 0; color: var(--text-2); font-size: 13px; }
-.tc .exp { font-size: 13px; }
-pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--surface-2); padding: 8px; border-radius: 8px; font-size: 12px; max-height: 300px; overflow: auto; }
-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
-th { color: var(--text-2); font-weight: 600; font-size: 12px; }
+.todo.in_progress { font-weight: 600; color: var(--accent); }
+.tc { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; background: var(--surface); }
+.tc label { display: flex; gap: 8px; align-items: flex-start; color: var(--text); font-size: 15px; margin: 0; font-weight: 600; }
+.tc input { width: auto; margin-top: 5px; }
+.tc ol { margin: 6px 0 4px 24px; padding: 0; color: var(--text-2); font-size: 14px; }
+.tc .exp { font-size: 14px; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--surface-2); padding: 10px 12px; border-radius: 10px;
+  font: 12.5px/1.55 "JetBrains Mono", ui-monospace, monospace; max-height: 320px; overflow: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+th { color: var(--text-2); font-weight: 600; font-size: 13px; }
 .table-wrap { overflow-x: auto; }
-.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
-.acc { border: 1px solid var(--border); border-radius: 10px; padding: 12px; background: var(--surface); }
-.acc .name { font-weight: 650; font-size: 15px; display: flex; gap: 8px; align-items: center; justify-content: space-between; }
-.meter { height: 6px; background: var(--surface-2); border-radius: 3px; margin: 6px 0; overflow: hidden; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.acc { border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; background: var(--surface); }
+.acc .name { font-weight: 650; font-size: 16px; display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+.meter { height: 6px; background: var(--surface-2); border-radius: 3px; margin: 8px 0; overflow: hidden; }
 .meter > i { display: block; height: 100%; background: var(--series-1); border-radius: 3px; }
-.muted { color: var(--muted); } .small { font-size: 12px; }
-.legend { display: flex; gap: 14px; font-size: 12px; color: var(--text-2); margin-bottom: 6px; }
-.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
-#tip { position: fixed; pointer-events: none; background: var(--text); color: var(--bg); font-size: 12px; padding: 6px 8px; border-radius: 6px; display: none; z-index: 20; }
-.lesson { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.muted { color: var(--muted); } .small { font-size: 13px; }
+.legend { display: flex; gap: 16px; font-size: 13px; color: var(--text-2); margin-bottom: 8px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+#tip { position: fixed; pointer-events: none; background: var(--text); color: var(--bg); font-size: 13px; padding: 6px 9px; border-radius: 6px; display: none; z-index: 20; }
+.lesson { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; border-bottom: 1px solid var(--border); }
 .lesson .txt { flex: 1; } .lesson.off .txt { color: var(--muted); text-decoration: line-through; }
 .lesson.pending .txt { font-style: italic; }
 .hidden { display: none !important; }
-.empty { color: var(--muted); padding: 16px; text-align: center; }
+.empty { color: var(--text-2); padding: 20px; text-align: center; }
 </style>
 </head>
 <body>
@@ -137,14 +201,17 @@ th { color: var(--text-2); font-weight: 600; font-size: 12px; }
     <div class="kpis" id="kpis"></div>
     <div class="card">
       <h2>New task</h2>
-      <textarea id="fPrompt" placeholder="Describe the task… (e.g. Fix the login 500 when the email has spaces, and add a test)"></textarea>
+      <div class="prompt-box">
+        <textarea id="fPrompt" data-images placeholder="Describe the task… Paste or drop screenshots here. Ctrl+Enter to start."></textarea>
+        <div class="thumbs" id="fPromptImgs"></div>
+        <div class="prompt-bar"><label class="btn ghost attach">📎 Add image<input type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden onchange="addImages('fPrompt', this.files); this.value=''"></label><span class="small muted" id="fMsg"></span><button class="btn" id="fSubmit">Start task</button></div>
+      </div>
       <div class="row">
         <div><label>Project folder (workdir)</label><input id="fWorkdir" placeholder="/home/you/projects/app"></div>
         <div><label>Assign to</label>
           <select id="fAgent"><option value="auto">Auto (Claude dispatches)</option><option value="claude">Claude agent (edits code, runs commands)</option><option value="quick">Claude quick answer (text only)</option><option value="local">Local model</option></select></div>
         <div><label>Verify command (optional)</label><input id="fVerify" placeholder="pytest -q"></div>
       </div>
-      <div class="actions"><button class="btn" id="fSubmit">Start task</button><span class="small muted" id="fMsg"></span></div>
     </div>
     <div class="card">
       <h2>Tasks</h2>
@@ -229,13 +296,21 @@ document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
 });
 
 // ---------- tasks ----------
-async function loadTasks() { tasks = await api("/api/tasks"); renderTasks(); }
+let apiKeyCost = null;
+async function loadTasks() {
+  [tasks, apiKeyCost] = await Promise.all([api("/api/tasks"), api("/api/api-key-cost").catch(() => null)]);
+  renderTasks();
+}
+const project = t => t.kind === "reflection" || !t.workdir ? "" : t.workdir.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
 function renderTasks() {
   const counts = tasks.reduce((a, t) => (a[t.status] = (a[t.status] || 0) + 1, a), {});
   const k = [["Running", counts.running || 0], ["Queued", counts.queued || 0],
     ["Need you", (counts.needs_input || 0) + (counts.review || 0)], ["Done", counts.done || 0], ["Failed", counts.failed || 0],
     ["API-equivalent cost", "$" + tasks.reduce((a, t) => a + (t.cost_usd || 0), 0).toFixed(2)]];
-  $("#kpis").innerHTML = k.map(([l, v]) => `<div class="kpi"><div class="v">${v}</div><div class="l">${l}</div></div>`).join("");
+  if (apiKeyCost && apiKeyCost.n) k.push(["API key spend", "$" + apiKeyCost.cost.toFixed(3),
+    `$${apiKeyCost.today.toFixed(3)} today, ${apiKeyCost.n} calls`]);
+  $("#kpis").innerHTML = k.map(([l, v, sub]) => `<div class="kpi"><div class="v">${v}</div><div class="l">${l}</div>` +
+    (sub ? `<div class="small muted">${esc(sub)}</div>` : "") + `</div>`).join("");
   const fs = [["all", "All"], ["active", "Active"], ["attention", "Need you"], ["done", "Done"], ["failed", "Failed"]];
   $("#filters").innerHTML = fs.map(([v, l]) => `<button class="chip ${filter === v ? "on" : ""}" data-f="${v}">${l}</button>`).join("");
   document.querySelectorAll("[data-f]").forEach(b => b.onclick = () => { filter = b.dataset.f; renderTasks(); });
@@ -243,10 +318,11 @@ function renderTasks() {
     (filter === "attention" && ["needs_input", "review"].includes(t.status)) || t.status === filter;
   const list = tasks.filter(match);
   $("#taskList").innerHTML = list.length ? list.map(t => `
-    <div class="task" data-id="${t.id}">
-      <div class="t">#${t.id} ${esc(t.title)}</div>
+    <div class="task" data-id="${t.id}" data-status="${t.status}">
+      <div class="t"><span class="id">#${t.id}</span>${esc(t.title)}</div>
       <div>${badge(t.status)}</div>
       <div class="m">
+        ${project(t) ? `<span class="proj" title="${esc(t.workdir)}">${esc(project(t))}</span>` : ""}
         ${t.kind === "reflection" ? `<span>🧠 Reflection</span>` : ""}${t.branch ? `<span>⎇ ${esc(t.branch)}${t.merged_at ? " ✓" : ""}</span>` : ""}
         <span>${agentLabel(t)}</span>
         ${t.category ? `<span>${esc(t.category)}</span>` : ""}
@@ -265,9 +341,10 @@ $("#fSubmit").onclick = async () => {
   if (!prompt) return;
   $("#fSubmit").disabled = true;
   try {
-    const r = await api("/api/tasks", { prompt, workdir: $("#fWorkdir").value.trim(), agent_pref: $("#fAgent").value, verify_cmd: $("#fVerify").value.trim() });
+    const r = await api("/api/tasks", { prompt, images: images.fPrompt || [], workdir: $("#fWorkdir").value.trim(), agent_pref: $("#fAgent").value, verify_cmd: $("#fVerify").value.trim() });
     $("#fMsg").textContent = r.id ? `Started task #${r.id}` : r.error;
-    $("#fPrompt").value = "";
+    if (!r.id) return;
+    $("#fPrompt").value = ""; images.fPrompt = []; renderThumbs("fPrompt");
     try { localStorage.setItem("otterraft.workdir", $("#fWorkdir").value.trim()); localStorage.setItem("otterraft.verify", $("#fVerify").value.trim()); } catch (e) {}
     loadTasks();
   } finally { $("#fSubmit").disabled = false; }
@@ -276,6 +353,7 @@ try { $("#fWorkdir").value = localStorage.getItem("otterraft.workdir") || ""; $(
 
 // ---------- detail ----------
 async function openTask(id) {
+  if (openId !== id) images.replyTxt = [];
   openId = id; lastEventId = 0;
   $("#detail").classList.add("open");
   const t = await api("/api/tasks/" + id);
@@ -298,11 +376,20 @@ function renderDetail(t) {
 
     ${t.status === "needs_input" ? `<div class="card" style="border-color:var(--warn)"><h2>The agent has a question</h2>
       ${(r.questions || []).map(q => `<p>• ${esc(q)}</p>`).join("") || `<p>${esc(r.summary || "")}</p>`}
-      <textarea id="replyTxt" placeholder="Answer so the agent can continue…"></textarea>
-      <div class="actions"><button class="btn" onclick="reply(${t.id})">Send and continue</button></div></div>` : ""}
+      <textarea id="replyTxt" data-images placeholder="Answer so the agent can continue… Paste or drop screenshots here."></textarea>
+      <div class="thumbs" id="replyTxtImgs"></div>
+      <div class="actions"><button class="btn" onclick="reply(${t.id})">Send and continue</button><label class="btn ghost attach">📎 Add image<input type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden onchange="addImages('replyTxt', this.files); this.value=''"></label></div></div>` : ""}
 
     ${t.todos && t.todos.length ? `<div class="card"><h2>Progress</h2>${t.todos.map(x =>
       `<div class="todo ${x.status}"><span>${x.status === "completed" ? "✓" : x.status === "in_progress" ? "▶" : "○"}</span><span>${esc(x.content)}</span></div>`).join("")}</div>` : ""}
+
+    ${r.analysis && typeof r.analysis === "object" ? `<div class="card"><h2>Analysis</h2>
+      <dl class="kv">
+        ${r.analysis.root_cause ? `<dt>Root cause</dt><dd style="white-space:pre-wrap">${esc(r.analysis.root_cause)}</dd>` : ""}
+        ${r.analysis.fix ? `<dt>Fix</dt><dd style="white-space:pre-wrap">${esc(r.analysis.fix)}</dd>` : ""}
+        ${[["Assumptions", r.analysis.assumptions], ["Not verified", r.analysis.unverified]].map(([k, v]) =>
+          Array.isArray(v) && v.length ? `<dt>${k}</dt><dd>${v.map(x => "• " + esc(x)).join("<br>")}</dd>` : "").join("")}
+      </dl></div>` : ""}
 
     ${t.report ? `<div class="card"><h2>Result</h2>
       <p>${esc(r.summary)}</p>
@@ -418,10 +505,51 @@ async function refreshDetail() {
   renderDetail(t);
   $("#log").innerHTML = log; lastEventId = keep;
   Object.entries(drafts).forEach(([id, v]) => { if ($("#" + id) && v) $("#" + id).value = v; });
+  renderThumbs("replyTxt");
   if (focused && $("#" + focused)) $("#" + focused).focus();
   $("#detailPanel").scrollTop = scroll;
 }
-async function reply(id) { await api(`/api/tasks/${id}/reply`, { message: $("#replyTxt").value }); refreshDetail(); loadTasks(); }
+async function reply(id) {
+  const r = await api(`/api/tasks/${id}/reply`, { message: $("#replyTxt").value, images: images.replyTxt || [] });
+  if (r.error) return alert(r.error);
+  images.replyTxt = []; $("#replyTxt").value = ""; refreshDetail(); loadTasks();
+}
+
+// ---------- images: paste, drop or pick; sent as data: URLs, saved server-side ----------
+const images = {};  // textarea id -> [{name, data}]; survives the detail panel's re-renders
+const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+async function addImages(id, files) {
+  for (const f of files) {
+    if (!IMAGE_TYPES.includes(f.type)) continue;
+    if (f.size > 10 * 1024 * 1024) { alert(`${f.name} is larger than 10 MB`); continue; }
+    const data = await new Promise(res => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.readAsDataURL(f); });
+    (images[id] = images[id] || []).push({ name: f.name, data });
+  }
+  renderThumbs(id);
+}
+function dropImage(id, i) { images[id].splice(i, 1); renderThumbs(id); }
+function renderThumbs(id) {
+  const box = $("#" + id + "Imgs");
+  if (box) box.innerHTML = (images[id] || []).map((im, i) => `<span class="thumb"><img src="${im.data}" alt="${esc(im.name)}">` +
+    `<button type="button" aria-label="Remove ${esc(im.name)}" onclick="dropImage('${id}', ${i})">×</button></span>`).join("");
+}
+const imageBox = e => e.target.closest && e.target.closest("textarea[data-images]");
+document.addEventListener("paste", e => {
+  const ta = imageBox(e), files = [...(e.clipboardData?.files || [])].filter(f => IMAGE_TYPES.includes(f.type));
+  if (ta && files.length) { e.preventDefault(); addImages(ta.id, files); }
+});
+document.addEventListener("dragover", e => { const ta = imageBox(e); if (ta) { e.preventDefault(); ta.classList.add("dropping"); } });
+document.addEventListener("dragleave", e => { const ta = imageBox(e); if (ta) ta.classList.remove("dropping"); });
+document.addEventListener("drop", e => {
+  const ta = imageBox(e);
+  if (!ta) return;
+  e.preventDefault(); ta.classList.remove("dropping"); addImages(ta.id, e.dataTransfer.files);
+});
+document.addEventListener("keydown", e => {
+  if (!(e.key === "Enter" && (e.ctrlKey || e.metaKey))) return;
+  if (e.target.id === "fPrompt") $("#fSubmit").click();
+  else if (e.target.id === "replyTxt" && openId) reply(openId);
+});
 async function review(id, accepted) {
   const feedback = $("#fbTxt").value.trim();
   if (!accepted && !feedback) { $("#fbTxt").focus(); $("#fbTxt").placeholder = "Say why you reject it, so the agent can fix it and OtterRaft can learn."; return; }

@@ -1,3 +1,4 @@
+import base64
 import contextlib
 import io
 import json
@@ -284,6 +285,18 @@ class E2E(unittest.TestCase):
 
 
 class Units(unittest.TestCase):
+    def test_pasted_images_are_saved_and_listed_in_the_prompt(self):
+        from otterraft.server import with_images
+        cfg = {"data_dir": tempfile.mkdtemp()}
+        png = "data:image/png;base64," + base64.b64encode(b"\x89PNG fake").decode()
+        out = with_images(cfg, "Fix this form", [{"name": "shot.png", "data": png}])
+        path = Path(out.splitlines()[-1].removeprefix("- "))
+        self.assertTrue(out.startswith("Fix this form\n\nAttached images"))
+        self.assertEqual(path.read_bytes(), b"\x89PNG fake")
+        self.assertEqual(with_images(cfg, "no images", []), "no images")
+        with self.assertRaises(ValueError):  # anything but an image is refused
+            with_images(cfg, "x", [{"data": "data:text/html;base64,PGI+"}])
+
     def _orch(self, **cfg):
         tmp = tempfile.mkdtemp()
         cfg_path = Path(tmp) / "o.json"

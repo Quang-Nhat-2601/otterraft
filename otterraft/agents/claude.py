@@ -100,6 +100,9 @@ class ClaudeRun:
             cmd += ["--model", self.model]
         if c.get("allowed_tools"):
             cmd += ["--allowedTools", ",".join(c["allowed_tools"])]
+        uploads = Path(self.cfg.get("data_dir") or "") / "uploads"
+        if self.cfg.get("data_dir") and uploads.is_dir():  # pasted images live outside the workdir
+            cmd += ["--add-dir", str(uploads)]
         if self.resume_session:
             # The session already carries its system prompt; sending it again costs thousands
             # of tokens per resume and changes nothing.

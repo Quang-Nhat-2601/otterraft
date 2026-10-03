@@ -1,8 +1,10 @@
 """HTTP API + Server-Sent Events + static dashboard. Standard library only."""
+import base64
 import hmac
 import json
 import queue
 import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -22,6 +24,32 @@ def _int(s):
         return int(s)
     except ValueError:
         raise NotFound from None
+
+
+IMAGE_TYPES = {"image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp"}
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
+
+
+def with_images(cfg, text, images):
+    """Saves pasted images (data: URLs) under <data_dir>/uploads and lists their paths in the
+    text: the agent opens them with its Read tool, so resumed sessions need nothing special."""
+    paths = []
+    for img in (images or [])[:10]:
+        head, _, data = str(img.get("data") or "").partition(",")
+        ext = IMAGE_TYPES.get(head.removeprefix("data:").removesuffix(";base64"))
+        if not ext:
+            raise ValueError("only PNG, JPEG, GIF and WebP images are accepted")
+        raw = base64.b64decode(data, validate=True)
+        if len(raw) > MAX_IMAGE_BYTES:
+            raise ValueError("an image is larger than 10 MB")
+        path = Path(cfg["data_dir"]) / "uploads" / f"{uuid.uuid4().hex}.{ext}"
+        path.parent.mkdir(exist_ok=True)
+        path.write_bytes(raw)
+        paths.append(str(path))
+    if not paths:
+        return text
+    return text.rstrip() + "\n\nAttached images (open each with the Read tool):\n" + \
+        "\n".join(f"- {p}" for p in paths)
 
 
 def stats(orch):
@@ -145,6 +173,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200 if t else 404, t or {"error": "not found"})
         if p == "/api/stats":
             return self._send(200, stats(o))
+        if p == "/api/api-key-cost":
+            # Real money: only the brain's OTTERRAFT_BRAIN_API_KEY calls; subscription runs are notional.
+            midnight = time.mktime(time.localtime()[:3] + (0, 0, 0, 0, 0, -1))
+            return self._send(200, o.db.one(
+                "SELECT COUNT(*) n, COALESCE(SUM(cost_usd),0) cost, "
+                "COALESCE(SUM(CASE WHEN ts>=? THEN cost_usd END),0) today "
+                "FROM usage WHERE name='brain-api'", (midnight,)))
         if p == "/api/lessons":
             return self._send(200, o.db.query("SELECT * FROM lessons ORDER BY pending DESC, enabled DESC, score DESC, id DESC"))
         if p == "/api/permissions":
@@ -167,8 +202,14 @@ class Handler(BaseHTTPRequestHandler):
         if p == "/api/tasks":
             if not (b.get("prompt") or "").strip():
                 return self._send(400, {"error": "prompt required"})
-            tid = o.submit(b["prompt"], b.get("title", ""), b.get("workdir", ""),
-                           b.get("agent_pref", "auto"), b.get("verify_cmd", ""))
+            try:
+                prompt = with_images(o.cfg, b["prompt"], b.get("images"))
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+            # Quick answers and local models have no tools to open an image with.
+            pref = "claude" if prompt != b["prompt"] else b.get("agent_pref", "auto")
+            tid = o.submit(prompt, b.get("title") or b["prompt"].strip().split("\n")[0][:80],
+                           b.get("workdir", ""), pref, b.get("verify_cmd", ""))
             return self._send(201, {"id": tid})
         if len(parts) == 4 and parts[:2] == ["api", "tasks"]:
             tid, action = _int(parts[2]), parts[3]
@@ -177,7 +218,10 @@ class Handler(BaseHTTPRequestHandler):
             if action == "cancel":
                 o.cancel(tid)
             elif action == "reply":
-                o.reply(tid, b.get("message", ""))
+                try:
+                    o.reply(tid, with_images(o.cfg, b.get("message", ""), b.get("images")))
+                except ValueError as e:
+                    return self._send(400, {"error": str(e)})
             elif action == "review":
                 o.review(tid, bool(b.get("accepted")), b.get("feedback", ""))
             elif action == "retry":
